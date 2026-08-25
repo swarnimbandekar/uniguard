@@ -1,0 +1,32 @@
+# Data files
+data/pcaps/*.pcap
+data/pcaps/*.pcapng
+data/*.csv
+
+# ML models (large files)
+ml-service/models/*.pkl
+ml-service/models/*.joblib
+!ml-service/models/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# Rust
+ingest/target/
+
+# Node
+dashboard/node_modules/
+dashboard/dist/
+
+# Docker
+*.log
+
+# IDE
+.vscode/
+.idea/
+.kiro/

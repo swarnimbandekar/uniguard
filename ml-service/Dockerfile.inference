@@ -1,0 +1,25 @@
+FROM python:3.13-slim-bookworm
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
+
+COPY proto/ ./proto/
+COPY inference_server.py .
+
+# Generate gRPC stubs
+RUN python -m grpc_tools.protoc \
+    -I./proto \
+    --python_out=. \
+    --grpc_python_out=. \
+    ./proto/inference.proto
+
+EXPOSE 50051
+
+CMD ["python", "inference_server.py"]

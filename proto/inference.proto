@@ -1,0 +1,118 @@
+syntax = "proto3";
+
+package inference;
+
+service ThreatDetector {
+    // Single flow prediction
+    rpc PredictFlow (FlowPredictRequest) returns (PredictResponse);
+    // Batch flow prediction
+    rpc PredictFlowBatch (FlowBatchRequest) returns (BatchResponse);
+    // DNS/DGA prediction
+    rpc PredictDns (DnsPredictRequest) returns (PredictResponse);
+    // DNS batch prediction
+    rpc PredictDnsBatch (DnsBatchRequest) returns (BatchResponse);
+    // Health check
+    rpc HealthCheck (Empty) returns (HealthResponse);
+}
+
+message Empty {}
+
+message HealthResponse {
+    bool healthy = 1;
+    string version = 2;
+    repeated string loaded_models = 3;
+}
+
+// Flow-level features for DDoS and PortScan detection
+message FlowFeatures {
+    // Basic flow identifiers
+    string src_ip = 1;
+    string dst_ip = 2;
+    uint32 src_port = 3;
+    uint32 dst_port = 4;
+    uint32 protocol = 5;
+
+    // Flow statistics
+    double flow_duration = 6;
+    double total_fwd_packets = 7;
+    double total_bwd_packets = 8;
+    double flow_bytes_per_sec = 9;
+    double flow_packets_per_sec = 10;
+
+    // Inter-arrival time stats
+    double flow_iat_mean = 11;
+    double flow_iat_std = 12;
+    double flow_iat_max = 13;
+    double flow_iat_min = 14;
+    double fwd_iat_mean = 15;
+    double bwd_iat_mean = 16;
+
+    // Packet size stats
+    double fwd_packet_len_mean = 17;
+    double bwd_packet_len_mean = 18;
+    double packet_len_variance = 19;
+    double avg_packet_size = 20;
+
+    // Flag counts
+    double syn_flag_count = 21;
+    double ack_flag_count = 22;
+    double rst_flag_count = 23;
+    double fin_flag_count = 24;
+    double psh_flag_count = 25;
+
+    // Ratios
+    double down_up_ratio = 26;
+    double fwd_bytes = 27;
+    double bwd_bytes = 28;
+
+    // PortScan specific fan-out features
+    double unique_dst_ports = 29;
+    double unique_dst_ips = 30;
+    double port_entropy = 31;
+    double syn_ratio = 32;
+    double total_flows_in_window = 33;
+}
+
+// DNS features for DGA detection
+message DnsFeatures {
+    string domain = 1;
+    double length = 2;
+    double entropy = 3;
+    double digit_ratio = 4;
+    double consonant_ratio = 5;
+    double vowel_ratio = 6;
+    double unique_char_ratio = 7;
+    double max_consonant_run = 8;
+    double num_dots = 9;
+    // N-gram features (serialized as repeated doubles)
+    repeated double ngram_features = 10;
+}
+
+message FlowPredictRequest {
+    FlowFeatures features = 1;
+    string detection_type = 2; // "ddos" or "portscan"
+}
+
+message FlowBatchRequest {
+    repeated FlowFeatures features = 1;
+    string detection_type = 2;
+}
+
+message DnsPredictRequest {
+    DnsFeatures features = 1;
+}
+
+message DnsBatchRequest {
+    repeated DnsFeatures features = 1;
+}
+
+message PredictResponse {
+    string threat_class = 1;   // "BENIGN", "DDoS", "PortScan", "DGA"
+    float confidence = 2;      // 0.0 to 1.0
+    string severity = 3;       // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+    string model_version = 4;
+}
+
+message BatchResponse {
+    repeated PredictResponse predictions = 1;
+}
