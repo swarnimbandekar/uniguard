@@ -34,6 +34,9 @@ interface Slot {
   DDoS: number
   PortScan: number
   DGA: number
+  EncryptedMalware: number
+  DataExfiltration: number
+  C2_BEACONING: number
   total: number
 }
 
@@ -57,9 +60,9 @@ const TC: Record<string, string> = {
   DDoS: K.crit,
   PortScan: K.high,
   DGA: K.med,
-  C2: K.info,
-  Exfil: '#b58900',
-  Recon: K.fg2,
+  C2_BEACONING: K.info,
+  EncryptedMalware: '#b58900',
+  DataExfiltration: '#8b5cf6',
 }
 
 const SC: Record<string, string> = {
@@ -70,12 +73,12 @@ const SC: Record<string, string> = {
 }
 
 const MODULES = [
-  { n: 'Volumetric DDoS', a: 'STANDBY · pending retrain', k: 'DDoS', on: false },
+  { n: 'Volumetric DDoS', a: 'HistGradientBoosting · 31f · 95K flows/s', k: 'DDoS', on: true },
   { n: 'Recon / Port Scan', a: 'LogisticRegression · 18f · calibrated', k: 'PortScan', on: true },
-  { n: 'DGA & DNS Tunnel', a: 'GB + char n-gram', k: 'DGA', on: true },
-  { n: 'C2 Beaconing', a: 'IAT periodicity', k: 'C2', on: false },
-  { n: 'Encrypted Malware', a: 'JA4 · TLS metadata', k: 'TLS', on: false },
-  { n: 'Data Exfiltration', a: 'Byte-ratio anomaly', k: 'Exfil', on: false },
+  { n: 'DGA & DNS Tunnel', a: 'GB + char n-gram · 19f + 200 bigrams', k: 'DGA', on: true },
+  { n: 'C2 Beaconing', a: 'Periodicity analysis · IAT jitter CV', k: 'C2_BEACONING', on: true },
+  { n: 'Encrypted Malware', a: 'HistGradientBoosting · 31f · 42K flows/s', k: 'EncryptedMalware', on: true },
+  { n: 'Data Exfiltration', a: 'HistGradientBoosting · 29f · 77K flows/s', k: 'DataExfiltration', on: true },
 ]
 
 const TABS = ['Threat Posture', 'Live Feed', 'Detection Engines', 'Telemetry', 'Flow Records']
@@ -246,6 +249,9 @@ export default function App() {
             if (a.threat_class === 'DDoS') nx.DDoS += 1
             else if (a.threat_class === 'PortScan') nx.PortScan += 1
             else if (a.threat_class === 'DGA') nx.DGA += 1
+            else if (a.threat_class === 'EncryptedMalware') nx.EncryptedMalware += 1
+            else if (a.threat_class === 'DataExfiltration') nx.DataExfiltration += 1
+            else if (a.threat_class === 'C2_BEACONING') nx.C2_BEACONING += 1
             return [...p.slice(0, -1), nx]
           }
           return [...p, {
@@ -253,6 +259,9 @@ export default function App() {
             DDoS: a.threat_class === 'DDoS' ? 1 : 0,
             PortScan: a.threat_class === 'PortScan' ? 1 : 0,
             DGA: a.threat_class === 'DGA' ? 1 : 0,
+            EncryptedMalware: a.threat_class === 'EncryptedMalware' ? 1 : 0,
+            DataExfiltration: a.threat_class === 'DataExfiltration' ? 1 : 0,
+            C2_BEACONING: a.threat_class === 'C2_BEACONING' ? 1 : 0,
           }].slice(-34)
         })
       } catch { /* noop */ }
@@ -316,7 +325,7 @@ export default function App() {
   const peak = useMemo(() => slots.reduce((m, s) => Math.max(m, s.total), 0), [slots])
   const lastPulse = pulse.length ? pulse[pulse.length - 1].v : 0
   const classSpark = useCallback(
-    (k: 'DDoS' | 'PortScan' | 'DGA') => slots.slice(-18).map(s => ({ v: s[k] })),
+    (k: 'DDoS' | 'PortScan' | 'DGA' | 'EncryptedMalware' | 'DataExfiltration') => slots.slice(-18).map(s => ({ v: s[k] })),
     [slots]
   )
   const rows = useMemo(
@@ -382,7 +391,7 @@ export default function App() {
                   ['Packet parser', 'ACTIVE', 'ok'],
                   ['Data diode', 'ENFORCED', 'ok'],
                   ['Payload decrypt', 'DISABLED', 'ok'],
-                  ['Inference (gRPC)', '3 MODELS', 'ok'],
+                  ['Inference (local)', '6 MODELS', 'ok'],
                   ['Alert bus', live ? 'LIVE' : 'DOWN', live ? 'ok' : 'bad'],
                 ].map(([k, v, d]) => (
                   <div className="health-c" key={k}>
@@ -424,7 +433,7 @@ export default function App() {
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={slots} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                       <defs>
-                        {(['DDoS', 'PortScan', 'DGA'] as const).map(k => (
+                        {(['DDoS', 'PortScan', 'DGA', 'EncryptedMalware', 'DataExfiltration', 'C2_BEACONING'] as const).map(k => (
                           <linearGradient key={k} id={`a${k}`} x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor={TC[k]} stopOpacity={0.42} />
                             <stop offset="100%" stopColor={TC[k]} stopOpacity={0.03} />
@@ -436,6 +445,9 @@ export default function App() {
                       <YAxis tickLine={false} axisLine={false} allowDecimals={false} width={42} />
                       <Tooltip content={<Tip />} cursor={{ stroke: K.mute, strokeDasharray: '3 3' }} />
                       <Area type="monotone" stackId="1" dataKey="DGA" name="DGA" stroke={TC.DGA} strokeWidth={1.3} fill="url(#aDGA)" />
+                      <Area type="monotone" stackId="1" dataKey="C2_BEACONING" name="C2 Beaconing" stroke={TC.C2_BEACONING} strokeWidth={1.3} fill="url(#aC2_BEACONING)" />
+                      <Area type="monotone" stackId="1" dataKey="EncryptedMalware" name="Encrypted Malware" stroke={TC.EncryptedMalware} strokeWidth={1.3} fill="url(#aEncryptedMalware)" />
+                      <Area type="monotone" stackId="1" dataKey="DataExfiltration" name="Exfiltration" stroke={TC.DataExfiltration} strokeWidth={1.3} fill="url(#aDataExfiltration)" />
                       <Area type="monotone" stackId="1" dataKey="PortScan" name="Port Scan" stroke={TC.PortScan} strokeWidth={1.3} fill="url(#aPortScan)" />
                       <Area type="monotone" stackId="1" dataKey="DDoS" name="DDoS" stroke={TC.DDoS} strokeWidth={1.3} fill="url(#aDDoS)" />
                     </AreaChart>
@@ -532,7 +544,7 @@ export default function App() {
               </div>
             </Panel>
 
-            <Panel name="Detection modules" foot="3 in production · 3 staged">
+            <Panel name="Detection modules" foot="6 models in production">
               {MODULES.map(m => {
                 const hits = stats?.by_threat_class?.[m.k] ?? 0
                 return (

@@ -244,6 +244,19 @@ async def get_recent_alerts(limit: int = Query(20, ge=1, le=100)):
     return {"alerts": recent, "count": len(recent)}
 
 
+@app.post("/api/alerts/clear")
+async def clear_alerts():
+    """Clear all alerts and reset statistics."""
+    alerts_store.clear()
+    stats["total_alerts"] = 0
+    stats["by_threat_class"] = defaultdict(int)
+    stats["by_severity"] = defaultdict(int)
+    stats["top_sources"] = defaultdict(int)
+    stats["start_time"] = time.time()
+    logger.info("All alerts cleared and stats reset")
+    return {"status": "cleared", "message": "All alerts and stats have been reset"}
+
+
 @app.get("/api/alerts/timeline")
 async def get_timeline(window_minutes: int = Query(5, ge=1, le=60)):
     """Get alert counts over time for timeline chart."""

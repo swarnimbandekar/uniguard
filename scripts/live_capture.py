@@ -218,6 +218,12 @@ def packet_to_record(pkt):
             "psh": bool(tcp.flags & 0x08),
             "urg": bool(tcp.flags & 0x20),
         }
+        # Include raw TCP payload for TLS parsing (first 512 bytes max)
+        raw_payload = bytes(tcp.payload) if tcp.payload else b""
+        if raw_payload and len(raw_payload) > 0:
+            import base64
+            # Cap at 512 bytes — enough for Client/Server Hello
+            record["payload_bytes_b64"] = base64.b64encode(raw_payload[:512]).decode("ascii")
         stats["by_protocol"]["TCP"] += 1
 
     # UDP
@@ -345,7 +351,10 @@ DASHBOARD: http://localhost:3000
     # Build BPF filter
     bpf_filter = "ip"
     if args.target:
-        bpf_filter = f"host {args.target}"
+        # Capture traffic to/from the target AND all DNS (port 53) traffic.
+        # DNS queries go to the resolver, not the target, so we must include
+        # them explicitly for DGA detection to work.
+        bpf_filter = f"host {args.target} or port 53"
     print(f"[+] BPF filter: {bpf_filter}")
 
     # Initialize Kafka

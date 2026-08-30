@@ -12,6 +12,10 @@ RUN pip install --no-cache-dir setuptools wheel && \
 
 COPY proto/ ./proto/
 COPY portscan/ ./portscan/
+COPY encrypted_malware/ ./encrypted_malware/
+COPY ddos/ ./ddos/
+COPY exfiltration/ ./exfiltration/
+COPY c2beacon/ ./c2beacon/
 COPY feature_extractor.py .
 
 # Generate gRPC stubs

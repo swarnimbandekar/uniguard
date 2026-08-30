@@ -31,6 +31,18 @@ from portscan.model import PortScanDetector
 from portscan.features import Flow, WindowSpec
 from portscan.streaming import StreamingWindower, StreamStats
 
+# Encrypted malware detection (local, flow-level, no gRPC)
+from encrypted_malware.detector import EncryptedMalwareDetector
+
+# DDoS detection (local, flow-level, no gRPC)
+from ddos.detector import DDoSDetector
+
+# Data exfiltration detection (local, flow-level, no gRPC)
+from exfiltration.detector import ExfiltrationDetector
+
+# C2 beaconing detection (local, periodicity analysis, no gRPC)
+from c2beacon.detector import C2BeaconDetector
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -42,6 +54,11 @@ GRPC_INFERENCE_HOST = os.environ.get("GRPC_INFERENCE_HOST", "localhost:50051")
 WINDOW_SECONDS = int(os.environ.get("WINDOW_SECONDS", "10"))
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.8"))
 PORTSCAN_MODEL_PATH = Path(os.environ.get("PORTSCAN_MODEL_PATH", "/app/models/portscan-10s2s.joblib"))
+ENCRYPTED_MALWARE_MODEL_PATH = Path(os.environ.get("ENCRYPTED_MALWARE_MODEL_PATH", "/app/models/encrypted_malware_flow.joblib"))
+DDOS_MODEL_PATH = Path(os.environ.get("DDOS_MODEL_PATH", "/app/models/ddos_flow.joblib"))
+EXFILTRATION_MODEL_PATH = Path(os.environ.get("EXFILTRATION_MODEL_PATH", "/app/models/exfiltration_flow.joblib"))
+C2_MODEL_PATH = Path(os.environ.get("C2_MODEL_PATH", "/app/models/c2_detector_60s_10s_ext13.joblib"))  # STANDBY
+C2_INTERNAL_PREFIXES = os.environ.get("C2_INTERNAL_PREFIXES", "")  # STANDBY
 
 
 @dataclass
@@ -119,6 +136,21 @@ class FeatureExtractor:
         self._open_tcp_flows: Dict[str, dict] = {}  # For conn_state approximation
         self._load_portscan_model()
 
+        # Encrypted malware detection (local, flow-level, no gRPC)
+        self.encrypted_malware_detector: Optional[EncryptedMalwareDetector] = None
+        self._load_encrypted_malware_model()
+
+        # DDoS detection (local, flow-level, no gRPC)
+        self.ddos_detector: Optional[DDoSDetector] = None
+        self._load_ddos_model()
+
+        # Data exfiltration detection (local, flow-level, no gRPC)
+        self.exfiltration_detector: Optional[ExfiltrationDetector] = None
+        self._load_exfiltration_model()
+
+        # C2 beaconing detection (local, periodicity analysis, no gRPC)
+        self.c2_beacon_detector = C2BeaconDetector()
+
         logger.info(f"Feature extractor initialized")
         logger.info(f"  Kafka broker: {KAFKA_BROKER}")
         logger.info(f"  Input topic: {KAFKA_INPUT_TOPIC}")
@@ -129,6 +161,19 @@ class FeatureExtractor:
             logger.info(f"  PortScan model: {PORTSCAN_MODEL_PATH.name} (local)")
         else:
             logger.warning("  PortScan model: NOT LOADED")
+        if self.encrypted_malware_detector:
+            logger.info(f"  Encrypted Malware model: {ENCRYPTED_MALWARE_MODEL_PATH.name} (local)")
+        else:
+            logger.warning("  Encrypted Malware model: NOT LOADED")
+        if self.ddos_detector:
+            logger.info(f"  DDoS model: {DDOS_MODEL_PATH.name} (local)")
+        else:
+            logger.warning("  DDoS model: NOT LOADED")
+        if self.exfiltration_detector:
+            logger.info(f"  Exfiltration model: {EXFILTRATION_MODEL_PATH.name} (local)")
+        else:
+            logger.warning("  Exfiltration model: NOT LOADED")
+        logger.info(f"  C2 Beacon detector: periodicity analysis (local)")
 
     def _load_portscan_model(self):
         """Load the portscan model and initialize the streaming windower."""
@@ -150,6 +195,285 @@ class FeatureExtractor:
                 logger.warning(f"PortScan model not found at {PORTSCAN_MODEL_PATH}")
         except Exception as e:
             logger.error(f"Failed to load PortScan model: {e}")
+
+    def _load_encrypted_malware_model(self):
+        """Load the encrypted malware flow detection model."""
+        try:
+            if ENCRYPTED_MALWARE_MODEL_PATH.exists():
+                self.encrypted_malware_detector = EncryptedMalwareDetector(ENCRYPTED_MALWARE_MODEL_PATH)
+            else:
+                logger.warning(f"Encrypted malware model not found at {ENCRYPTED_MALWARE_MODEL_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to load encrypted malware model: {e}")
+
+    def _load_ddos_model(self):
+        """Load the DDoS flow detection model."""
+        try:
+            if DDOS_MODEL_PATH.exists():
+                self.ddos_detector = DDoSDetector(DDOS_MODEL_PATH)
+            else:
+                logger.warning(f"DDoS model not found at {DDOS_MODEL_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to load DDoS model: {e}")
+
+    def _load_exfiltration_model(self):
+        """Load the data exfiltration detection model."""
+        try:
+            if EXFILTRATION_MODEL_PATH.exists():
+                self.exfiltration_detector = ExfiltrationDetector(EXFILTRATION_MODEL_PATH)
+            else:
+                logger.warning(f"Exfiltration model not found at {EXFILTRATION_MODEL_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to load exfiltration model: {e}")
+
+    def _score_encrypted_malware(self):
+        """
+        Score all mature TCP flows for encrypted malware behavior.
+        Called at window boundaries. Uses only flow-level metadata —
+        no TLS parsing, no payload decryption.
+        """
+        if self.encrypted_malware_detector is None:
+            return
+
+        alerts_produced = 0
+
+        with self.lock:
+            for key, flow in self.flows.items():
+                # Only score TCP flows with enough data
+                if flow.protocol != 6:
+                    continue
+                total_pkts = flow.fwd_packets + flow.bwd_packets
+                if total_pkts < 3:
+                    continue
+
+                # Score the flow
+                score = self.encrypted_malware_detector.score(flow)
+                if score is None:
+                    continue
+
+                if self.encrypted_malware_detector.is_malware(score):
+                    severity = self.encrypted_malware_detector.severity(score)
+                    duration = max(flow.last_time - flow.start_time, 0.001)
+                    alert = self._create_alert(
+                        threat_class="EncryptedMalware",
+                        confidence=score,
+                        severity=severity,
+                        src_ip=flow.src_ip,
+                        dst_ip=flow.dst_ip,
+                        src_port=flow.src_port,
+                        dst_port=flow.dst_port,
+                        evidence={
+                            "duration_sec": round(duration, 2),
+                            "fwd_bytes": flow.fwd_bytes,
+                            "bwd_bytes": flow.bwd_bytes,
+                            "fwd_packets": flow.fwd_packets,
+                            "bwd_packets": flow.bwd_packets,
+                            "bytes_per_sec": round((flow.fwd_bytes + flow.bwd_bytes) / duration, 1),
+                            "dst_port": flow.dst_port,
+                            "down_up_ratio": round(flow.bwd_bytes / max(flow.fwd_bytes, 1), 2),
+                        },
+                    )
+                    self._produce_alert(alert)
+                    alerts_produced += 1
+                    logger.info(
+                        f"EncryptedMalware alert: {flow.src_ip}:{flow.src_port}→"
+                        f"{flow.dst_ip}:{flow.dst_port} score={score:.3f} sev={severity}"
+                    )
+
+        if alerts_produced > 0:
+            logger.info(f"Encrypted malware scan: {alerts_produced} alerts")
+
+    def _score_ddos(self):
+        """
+        Score flows for DDoS attack patterns.
+        Called at window boundaries.
+        Only flags HIGH-VOLUME flows that actually look like floods.
+        """
+        if self.ddos_detector is None:
+            return
+
+        alerts_produced = 0
+
+        with self.lock:
+            # --- Aggregate flows by destination to detect volumetric floods ---
+            # A DDoS is characterized by MANY connections/packets hammering one
+            # victim within the window, not a single flow. We aggregate per dst.
+            dst_agg = {}  # dst_ip -> {pkts, bytes, flows, syn, first_ts, last_ts, dst_port}
+            for key, flow in self.flows.items():
+                if flow.protocol != 6:
+                    continue
+                d = dst_agg.setdefault(flow.dst_ip, {
+                    "pkts": 0, "bytes": 0, "flows": 0, "syn": 0,
+                    "first_ts": flow.start_time, "last_ts": flow.last_time,
+                    "dst_port": flow.dst_port, "src_ip": flow.src_ip,
+                })
+                d["pkts"] += flow.fwd_packets + flow.bwd_packets
+                d["bytes"] += flow.fwd_bytes + flow.bwd_bytes
+                d["flows"] += 1
+                d["syn"] += flow.syn_count
+                d["first_ts"] = min(d["first_ts"], flow.start_time)
+                d["last_ts"] = max(d["last_ts"], flow.last_time)
+
+            for dst_ip, d in dst_agg.items():
+                duration = max(d["last_ts"] - d["first_ts"], 0.001)
+                pkt_rate = d["pkts"] / duration
+                # Volumetric DDoS signature: high aggregate packet rate OR
+                # a flood of many connections to one victim in a short time.
+                is_flood = (
+                    (d["pkts"] >= 500 and pkt_rate >= 200)  # sustained high rate
+                    or (d["flows"] >= 200 and duration < 15)  # connection flood
+                )
+                if not is_flood:
+                    continue
+
+                # Confidence scales with intensity
+                score = min(0.90 + min(pkt_rate / 5000, 0.09), 0.99)
+                if d["flows"] >= 500 or pkt_rate >= 2000:
+                    score = 0.99
+
+                severity = "CRITICAL" if score >= 0.97 else "HIGH" if score >= 0.93 else "MEDIUM"
+                if True:
+                    total_bytes = d["bytes"]
+                    alert = self._create_alert(
+                        threat_class="DDoS",
+                        confidence=score,
+                        severity=severity,
+                        src_ip=d["src_ip"],
+                        dst_ip=dst_ip,
+                        src_port=0,
+                        dst_port=d["dst_port"],
+                        evidence={
+                            "duration_sec": round(duration, 2),
+                            "total_bytes": d["bytes"],
+                            "total_packets": d["pkts"],
+                            "connection_count": d["flows"],
+                            "bytes_per_sec": round(d["bytes"] / duration, 1),
+                            "pkts_per_sec": round(pkt_rate, 1),
+                            "syn_count": d["syn"],
+                        },
+                    )
+                    self._produce_alert(alert)
+                    alerts_produced += 1
+                    logger.info(
+                        f"DDoS alert: {d['src_ip']}→{dst_ip}:{d['dst_port']} "
+                        f"score={score:.3f} sev={severity} pkts/s={pkt_rate:.0f} "
+                        f"conns={d['flows']}"
+                    )
+
+        if alerts_produced > 0:
+            logger.info(f"DDoS scan: {alerts_produced} alerts")
+
+    def _score_exfiltration(self):
+        """
+        Score flows for data exfiltration patterns.
+        Called at window boundaries.
+        """
+        if self.exfiltration_detector is None:
+            return
+
+        alerts_produced = 0
+
+        with self.lock:
+            for key, flow in self.flows.items():
+                if flow.protocol != 6:
+                    continue
+                if flow.fwd_bytes < 1000:
+                    continue
+
+                score = self.exfiltration_detector.score(flow)
+                if score is None:
+                    continue
+
+                if self.exfiltration_detector.is_exfiltration(score):
+                    severity = self.exfiltration_detector.severity(score)
+                    duration = max(flow.last_time - flow.start_time, 0.001)
+                    alert = self._create_alert(
+                        threat_class="DataExfiltration",
+                        confidence=score,
+                        severity=severity,
+                        src_ip=flow.src_ip,
+                        dst_ip=flow.dst_ip,
+                        src_port=flow.src_port,
+                        dst_port=flow.dst_port,
+                        evidence={
+                            "duration_sec": round(duration, 2),
+                            "fwd_bytes": flow.fwd_bytes,
+                            "bwd_bytes": flow.bwd_bytes,
+                            "up_down_ratio": round(flow.fwd_bytes / max(flow.bwd_bytes, 1), 2),
+                            "fwd_packets": flow.fwd_packets,
+                            "bwd_packets": flow.bwd_packets,
+                            "response_ratio": round(flow.bwd_packets / max(flow.fwd_packets, 1), 3),
+                            "bytes_per_sec": round((flow.fwd_bytes + flow.bwd_bytes) / duration, 1),
+                        },
+                    )
+                    self._produce_alert(alert)
+                    alerts_produced += 1
+                    logger.info(
+                        f"Exfiltration alert: {flow.src_ip}→{flow.dst_ip}:{flow.dst_port} "
+                        f"score={score:.3f} sev={severity} upload={flow.fwd_bytes}"
+                    )
+
+        if alerts_produced > 0:
+            logger.info(f"Exfiltration scan: {alerts_produced} alerts")
+
+    def _score_c2_beacon(self):
+        """
+        Feed current window's flows into the C2 beacon tracker, then scan
+        for periodic beaconing patterns across the rolling history.
+        """
+        if self.c2_beacon_detector is None:
+            return
+
+        with self.lock:
+            # Record each TCP flow as a connection event for its endpoint pair
+            for key, flow in self.flows.items():
+                if flow.protocol != 6:
+                    continue
+                total_pkts = flow.fwd_packets + flow.bwd_packets
+                if total_pkts < 1:
+                    continue
+                self.c2_beacon_detector.observe(
+                    src_ip=flow.src_ip,
+                    dst_ip=flow.dst_ip,
+                    dst_port=flow.dst_port,
+                    ts=flow.start_time,
+                    nbytes=flow.fwd_bytes + flow.bwd_bytes,
+                )
+
+            detections = self.c2_beacon_detector.scan()
+
+        alerts_produced = 0
+        for src_ip, dst_ip, dst_port, ev in detections:
+            confidence = ev["confidence"]
+            if not self.c2_beacon_detector.is_beacon(confidence):
+                continue
+            severity = self.c2_beacon_detector.severity(confidence)
+            alert = self._create_alert(
+                threat_class="C2_BEACONING",
+                confidence=confidence,
+                severity=severity,
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                src_port=0,
+                dst_port=dst_port,
+                evidence={
+                    "beacon_count": ev["beacon_count"],
+                    "mean_interval_sec": ev["mean_interval_sec"],
+                    "jitter_cv": ev["jitter_cv"],
+                    "interval_std_sec": ev["interval_std_sec"],
+                    "total_bytes": ev["total_bytes"],
+                },
+            )
+            self._produce_alert(alert)
+            alerts_produced += 1
+            logger.info(
+                f"C2Beacon alert: {src_ip}->{dst_ip}:{dst_port} "
+                f"conf={confidence:.3f} interval={ev['mean_interval_sec']}s "
+                f"jitter_cv={ev['jitter_cv']} beacons={ev['beacon_count']}"
+            )
+
+        if alerts_produced > 0:
+            logger.info(f"C2 beacon scan: {alerts_produced} alerts")
 
     def _process_portscan_packet(self, pkt: dict):
         """Track TCP/UDP packets for portscan detection.
@@ -174,7 +498,11 @@ class FeatureExtractor:
         # Skip broadcast/multicast source IPs — not real scan sources
         if (src_ip.endswith(".255") or src_ip.endswith(".0")
                 or src_ip.startswith("224.") or src_ip.startswith("239.")
-                or src_ip == "255.255.255.255"):
+                or src_ip == "255.255.255.255"
+                or src_ip.startswith("162.159.")    # Cloudflare WARP/DNS
+                or src_ip.startswith("127.")        # Loopback
+                or src_ip.startswith("104.16.")     # Cloudflare CDN
+                ):
             return
 
         # For UDP: emit a flow immediately (stateless)
@@ -275,6 +603,11 @@ class FeatureExtractor:
         """Feed a flow to the streaming windower and produce alerts for any triggered windows."""
         windows = self.portscan_windower.push(flow)
         for window in windows:
+            # Must have multiple unique destination ports to be a real scan
+            unique_ports = window.evidence.get("unique_dst_ports", 0)
+            if unique_ports < 10:
+                continue
+
             confidence = self.portscan_detector.score(window)
             # Use a higher threshold than the model's default (0.1989) to reduce
             # false positives on noisy/public networks. Only alert on strong signals.
@@ -748,6 +1081,10 @@ class FeatureExtractor:
                 if elapsed >= WINDOW_SECONDS:
                     if packets_in_window > 0:
                         logger.debug(f"Window closed: {packets_in_window} packets in {elapsed:.1f}s")
+                        self._score_ddos()
+                        self._score_encrypted_malware()
+                        self._score_exfiltration()
+                        self._score_c2_beacon()
                         self._run_inference()
                     packets_in_window = 0
                     self.window_start = time.time()

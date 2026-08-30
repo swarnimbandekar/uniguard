@@ -1,0 +1,57 @@
+{
+  "component": "c2_beaconing_detector",
+  "version": "1.0.0",
+  "architecture": "two_timescale_independent_no_fusion",
+  "detectors": [
+    {
+      "detector_id": "c2_60s_10s",
+      "timescale": "c2_fast_60s",
+      "role": "primary_live",
+      "artifact": "models/c2_detector_60s_10s_ext13.joblib",
+      "window_s": 60,
+      "stride_s": 10,
+      "subbins": 10,
+      "window_close_latency_s": 60,
+      "alert_stride_s": 10,
+      "threshold_policy": "validation FP<=60/hour",
+      "threshold_note": "loaded from the artifact bundle ('threshold'); do not hardcode"
+    },
+    {
+      "detector_id": "c2_300s_60s",
+      "timescale": "c2_deep_300s",
+      "role": "secondary_slow_context",
+      "artifact": "models/c2_detector_300s_60s_ext13.joblib",
+      "window_s": 300,
+      "stride_s": 60,
+      "subbins": 10,
+      "window_close_latency_s": 300,
+      "alert_stride_s": 60,
+      "threshold_policy": "validation FP<=60/hour",
+      "threshold_note": "loaded from the artifact bundle ('threshold'); do not hardcode"
+    }
+  ],
+  "input": {
+    "source": "native_zeek_bro_conn_log",
+    "mode": "read_only_passive",
+    "required_fields": ["ts", "id.orig_h", "id.resp_h", "id.resp_p", "proto",
+                        "orig_pkts", "resp_pkts", "duration", "orig_ip_bytes", "resp_ip_bytes", "uid"],
+    "internal_originator_prefixes": ["147.32."],
+    "internal_prefixes_note": "capture-50 monitored /16; set to your monitored internal prefixes, or null to score all originators",
+    "payload_inspection": false,
+    "decryption": false,
+    "encrypted_traffic_compatible": true
+  },
+  "output": {
+    "format": "jsonl",
+    "schema": "schema/alert_schema.json",
+    "threat_class": "C2_BEACONING",
+    "flow_id_field": "zeek_uid_context_only",
+    "fusion": "none_channels_independent"
+  },
+  "constraints_enforced": {
+    "no_endpoint_identity_features": true,
+    "no_return_path_or_blocking": true,
+    "streaming_bounded_state": true,
+    "bounded_alert_latency": true
+  }
+}

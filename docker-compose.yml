@@ -99,6 +99,9 @@ services:
       - WINDOW_SECONDS=10
       - CONFIDENCE_THRESHOLD=0.8
       - PORTSCAN_MODEL_PATH=/app/models/portscan-10s2s.joblib
+      - ENCRYPTED_MALWARE_MODEL_PATH=/app/models/encrypted_malware_flow.joblib
+      - DDOS_MODEL_PATH=/app/models/ddos_flow.joblib
+      - EXFILTRATION_MODEL_PATH=/app/models/exfiltration_flow.joblib
     volumes:
       - ./ml-service/models:/app/models:ro
     networks:

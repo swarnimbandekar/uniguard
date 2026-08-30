@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "C2 Beaconing Alert",
+  "description": "Standardized alert emitted by the passive C2-beaconing detectors (fast 60s/10s and deep 300s/60s). One alert per flagged unit (window_start, orig_h, resp_h, resp_p, proto) at window close.",
+  "type": "object",
+  "required": ["timestamp", "window_start", "detector_id", "timescale", "flow_id", "threat_class", "confidence", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "description": "ISO-8601 window-close time (window_start + window_s). The moment the alert becomes available."
+    },
+    "window_start": {
+      "type": "string",
+      "description": "ISO-8601 start of the observation window that produced the alert."
+    },
+    "detector_id": {
+      "type": "string",
+      "description": "Detector instance id, e.g. c2_60s_10s or c2_300s_60s.",
+      "enum": ["c2_60s_10s", "c2_300s_60s"]
+    },
+    "timescale": {
+      "type": "string",
+      "description": "Human-facing timescale label. The two channels are INDEPENDENT; scores are never fused.",
+      "enum": ["c2_fast_60s", "c2_deep_300s"]
+    },
+    "flow_id": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Zeek uid(s) of the flows that contributed to this unit. CONTEXT ONLY - never a model feature."
+    },
+    "threat_class": {
+      "type": "string",
+      "const": "C2_BEACONING"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "HistGradientBoosting predict_proba[:,1] for the unit. Compared against the artifact's fixed validation-selected threshold."
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["unit", "n_contributing_flows", "features"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": {
+          "type": "object",
+          "description": "The grouping key. IPs/ports are CONTEXT for the analyst and dashboard correlation, never model features.",
+          "required": ["orig_h", "resp_h", "resp_p", "proto"],
+          "properties": {
+            "orig_h": {"type": "string"},
+            "resp_h": {"type": "string"},
+            "resp_p": {"type": "integer"},
+            "proto": {"type": "string"}
+          }
+        },
+        "n_contributing_flows": {"type": "integer", "minimum": 1},
+        "features": {
+          "type": "object",
+          "description": "The 13 passive behavioral features that produced the score. Null where undefined for the unit (too few flows/gaps).",
+          "required": ["endpoint_host_fanin", "n_flows", "dst_recurrence", "host_endpoint_fanout",
+                       "iat_mean", "iat_cov", "mean_pkts", "iat_madn", "dur_mean", "dur_cov",
+                       "pkts_cov", "bytes_mean", "host_flow_share"],
+          "additionalProperties": false,
+          "properties": {
+            "endpoint_host_fanin": {"type": ["number", "null"]},
+            "n_flows": {"type": ["number", "null"]},
+            "dst_recurrence": {"type": ["number", "null"]},
+            "host_endpoint_fanout": {"type": ["number", "null"]},
+            "iat_mean": {"type": ["number", "null"]},
+            "iat_cov": {"type": ["number", "null"]},
+            "mean_pkts": {"type": ["number", "null"]},
+            "iat_madn": {"type": ["number", "null"]},
+            "dur_mean": {"type": ["number", "null"]},
+            "dur_cov": {"type": ["number", "null"]},
+            "pkts_cov": {"type": ["number", "null"]},
+            "bytes_mean": {"type": ["number", "null"]},
+            "host_flow_share": {"type": ["number", "null"]}
+          }
+        }
+      }
+    }
+  }
+}

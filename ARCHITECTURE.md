@@ -31,38 +31,42 @@ This system implements an AI/ML pipeline for detecting cyber threats in unidirec
 
 ---
 
-### 2. Feature Extraction Service (`/ml-service/feature_extractor.py`)
+### 2. Feature Extraction + Detection Service (`/ml-service/feature_extractor.py`)
 
-**Purpose**: Aggregate raw packet records into flow-level features and route to ML inference.
+**Purpose**: Aggregate raw packet records into flow-level features and run detection.
 
-**Technology**: Python with `confluent-kafka` and `grpc`.
+**Technology**: Python with `confluent-kafka`, `scikit-learn`, `grpc`.
 
 **Responsibilities**:
 - Consume JSON packet records from Kafka `flow-records` topic
 - Maintain in-memory flow table keyed by 5-tuple (bidirectional)
-- Compute per-flow statistics over configurable time windows (default 10s):
-  - Duration, packet counts, byte counts
-  - Inter-arrival time statistics (mean, std, max, min)
-  - TCP flag counts (SYN, ACK, RST, FIN, PSH)
-  - Byte rate and packet rate
-- Compute per-source-IP fan-out features for port scan detection:
-  - Unique destination ports and IPs
-  - Port entropy
-  - SYN ratio
-- Extract DNS domain features for DGA detection:
-  - Shannon entropy
-  - Character distribution ratios
-  - Consonant run length
-- Call gRPC inference server with batch requests
-- Produce structured alerts to Kafka `threat-alerts` topic
+- Compute per-flow statistics over 10s tumbling windows:
+  - Duration, packet counts, byte counts, byte/packet rates
+  - Inter-arrival time statistics (mean, std) per direction
+  - TCP flag counts and ratios (SYN, ACK, RST, FIN, PSH)
+  - Packet-size distribution stats
+- Run **five detectors LOCALLY** at each window boundary (no gRPC round-trip):
+  - **PortScan** — per-source fan-out + calibrated model via streaming windower
+  - **DDoS** — aggregates flows per destination; flags volumetric floods
+  - **Encrypted Malware** — scores each non-standard-port flow
+  - **Data Exfiltration** — scores flows with asymmetric upload volume
+  - **C2 Beaconing** — tracks per-endpoint connection times, flags periodic beacons
+- Extract DNS domain features and call the gRPC inference server for **DGA**
+- Produce standardized alerts to Kafka `threat-alerts` topic
 
-**Windowing Strategy**: Fixed 10-second tumbling windows. At window close, all accumulated flows are finalized and sent for inference. This provides bounded latency (<15s end-to-end).
+**Detector modules** (each a self-contained package under `/ml-service`):
+`portscan/`, `ddos/`, `encrypted_malware/`, `exfiltration/`, `c2beacon/`.
+
+**Windowing Strategy**: Fixed 10-second tumbling windows. At window close, all five
+local detectors score the accumulated flows, then flows are reset. The C2 beacon
+tracker persists connection history across windows (with stale-endpoint eviction) so
+periodicity can be measured over minutes. Provides bounded latency (<15s end-to-end).
 
 ---
 
 ### 3. ML Inference Server (`/ml-service/inference_server.py`)
 
-**Purpose**: Serve pre-trained threat detection models via gRPC.
+**Purpose**: Serve the DGA model via gRPC (the only detector that runs off-box).
 
 **Technology**: Python with `grpc`, `scikit-learn`, `joblib`.
 
@@ -70,22 +74,34 @@ This system implements an AI/ML pipeline for detecting cyber threats in unidirec
 
 | Model | Algorithm | Input | Output |
 |-------|-----------|-------|--------|
-| DDoS | Random Forest (100 trees, depth 20) | 22 flow-level features | Binary: BENIGN/DDoS |
-| PortScan | Gradient Boosting (200 trees, depth 5) | 9 fan-out features (scaled) | Binary: BENIGN/PortScan |
-| DGA | Gradient Boosting (300 trees, depth 6) | 10 stat features + 300 n-gram features | Binary: BENIGN/DGA |
+| DGA | Gradient Boosting (200 trees, depth 5) | 19 stat features + 200 char n-grams | Binary: BENIGN/DGA |
+
+The other five detectors run locally inside the feature extractor for lower latency.
+See each model's metadata JSON in `/ml-service/models` for exact features and thresholds.
 
 **API**:
-- `PredictFlow(FlowFeatures, detection_type)` → single prediction
-- `PredictFlowBatch(FlowFeatures[], detection_type)` → batch prediction
 - `PredictDns(DnsFeatures)` → single DGA prediction
 - `PredictDnsBatch(DnsFeatures[])` → batch DGA prediction
 - `HealthCheck()` → server status and loaded models
 
-**Severity Mapping**:
-- Confidence ≥ 0.95 → CRITICAL
-- Confidence ≥ 0.90 → HIGH
-- Confidence ≥ 0.80 → MEDIUM
-- Confidence < 0.80 → LOW (not alerted)
+---
+
+### 3a. Detection Models Summary
+
+| Threat Class | Model Type | Features | Threshold | Notes |
+|---|---|---|---|---|
+| `PortScan` | Logistic Regression (calibrated) | 18 | 0.60 | Streaming windower, Zeek conn_state approx |
+| `DDoS` | HistGradientBoosting | 31 | 0.92 | Per-destination aggregation for volumetric floods |
+| `DGA` | Gradient Boosting + n-grams | 19 + 200 | — | Runs via gRPC |
+| `C2_BEACONING` | Periodicity analysis | temporal | 0.70 | Inter-arrival jitter CV across repeated connections |
+| `EncryptedMalware` | HistGradientBoosting | 31 | 0.28 | Non-standard-port flows; rule override for beacons |
+| `DataExfiltration` | HistGradientBoosting | 29 | 0.99 | Rule override for large asymmetric uploads |
+
+All flow models are trained on synthetic behavioral data (`train_all_models.py`,
+`train_encrypted_malware.py`) and reinforced with deterministic rule overrides plus
+minimum-volume guards to suppress false positives on real traffic.
+
+**Severity Mapping**: Confidence ≥ 0.95 → CRITICAL · ≥ 0.85 → HIGH · ≥ 0.70 → MEDIUM · below → LOW
 
 ---
 
@@ -151,19 +167,20 @@ This system implements an AI/ML pipeline for detecting cyber threats in unidirec
 ## Data Flow
 
 ```
-PCAP File → [Rust Ingest] → Kafka:flow-records → [Feature Extractor] → gRPC → [ML Inference]
-                                                         ↓
-                                                  Kafka:threat-alerts
-                                                         ↓
-                                                  [FastAPI Backend]
-                                                         ↓
-                                                  WebSocket → [React Dashboard]
+PCAP / Live Capture → [Ingest] → Kafka:flow-records → [Feature Extractor + 5 local detectors]
+                                                              │  └─ gRPC → [ML Inference: DGA]
+                                                              ▼
+                                                       Kafka:threat-alerts
+                                                              ▼
+                                                       [FastAPI Backend]
+                                                              ▼
+                                                       WebSocket → [React Dashboard]
 ```
 
 ## Security Model
 
-1. **Read-Only Ingest**: The Rust service reads from a mounted volume. No network write-back.
-2. **No Decryption**: TLS traffic analyzed by metadata only (future: JA3/JA4 fingerprints).
+1. **Read-Only Ingest**: Capture reads from a mounted volume or a passive mirror. No network write-back.
+2. **No Decryption**: All traffic analyzed by metadata only — headers, flags, timing, byte volumes. No payload inspection.
 3. **Isolation**: Each service runs in its own container with minimal privileges.
 4. **No Inline Blocking**: The system produces intelligence (alerts), never mitigation commands.
 

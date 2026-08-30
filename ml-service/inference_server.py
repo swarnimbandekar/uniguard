@@ -4,6 +4,7 @@ Loads pre-trained models and serves predictions for DDoS, PortScan, and DGA.
 """
 
 import os
+import json
 import math
 import logging
 from collections import Counter
@@ -149,6 +150,24 @@ class ThreatDetectorServicer(inference_pb2_grpc.ThreatDetectorServicer):
             logger.info("Loaded DGA model (Gradient Boosting)")
         else:
             logger.warning(f"DGA model not found at {dga_path}")
+
+        # Encrypted Malware / TLS model
+        tls_path = MODELS_DIR / "tls_malware_detector.joblib"
+        tls_meta_path = MODELS_DIR / "tls_malware_detector.metadata.json"
+        if tls_path.exists() and tls_meta_path.exists():
+            with open(tls_meta_path) as f:
+                tls_meta = json.load(f)
+            self.models["encrypted_malware"] = {
+                "model": joblib.load(tls_path),
+                "metadata": tls_meta,
+                "feature_cols": tls_meta["feature_cols"],
+                "threshold": tls_meta["decision_threshold"],
+            }
+            logger.info(f"Loaded TLS Malware model (LGBMClassifier, "
+                        f"{tls_meta['n_features']} features, "
+                        f"threshold={tls_meta['decision_threshold']:.4f})")
+        else:
+            logger.info("Encrypted Malware (TLS) detection: handled by local feature extractor")
 
         logger.info(f"Total models loaded: {len(self.models)}")
 
