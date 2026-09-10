@@ -106,6 +106,12 @@ class FeatureExtractor:
         self.flows: Dict[str, FlowState] = {}
         self.source_ips: Dict[str, SourceIPState] = defaultdict(SourceIPState)
         self.dns_queries: List[dict] = []
+        # Per-window cross-detector suppression: destination endpoints already
+        # claimed by DDoS or PortScan this window are excluded from C2 beacon
+        # scoring, so a flood/scan can't ALSO be mislabelled as beaconing.
+        self.window_claimed_dsts: set = set()
+        # Sources flagged as scanners this window — also excluded from C2 beacon.
+        self.window_claimed_srcs: set = set()
         self.lock = Lock()
         self.window_start = time.time()
 
@@ -331,6 +337,9 @@ class FeatureExtractor:
                 if d["flows"] >= 500 or pkt_rate >= 2000:
                     score = 0.99
 
+                # Claim this victim so C2 beacon scoring skips the flood traffic.
+                self.window_claimed_dsts.add(dst_ip)
+
                 severity = "CRITICAL" if score >= 0.97 else "HIGH" if score >= 0.93 else "MEDIUM"
                 if True:
                     total_bytes = d["bytes"]
@@ -424,20 +433,69 @@ class FeatureExtractor:
         if self.c2_beacon_detector is None:
             return
 
+        # Well-known service ports: legitimate repeated connections here (web,
+        # mail, SSH, etc.) are not what a covert C2 channel uses. Real beacons
+        # favour non-standard/high ports.
+        C2_SKIP_PORTS = {80, 443, 22, 25, 53, 110, 143, 993, 995, 3389,
+                         8080, 8443, 445, 139, 135}
+        # A genuine beacon completes a session and exchanges a small but non-zero
+        # payload. Floods and scans send SYN-only / near-zero-byte probes.
+        MIN_BYTES_PER_CONN = 40
+
         with self.lock:
-            # Record each TCP flow as a connection event for its endpoint pair
+            claimed_dsts = set(self.window_claimed_dsts)
+            claimed_srcs = set(self.window_claimed_srcs)
+            # Record each qualifying TCP flow as a beacon connection event.
             for key, flow in self.flows.items():
                 if flow.protocol != 6:
                     continue
                 total_pkts = flow.fwd_packets + flow.bwd_packets
                 if total_pkts < 1:
                     continue
+
+                # DEBUG: log candidate beacon flows on non-std ports
+                if flow.dst_port not in C2_SKIP_PORTS and flow.dst_port > 1024:
+                    logger.info(
+                        f"C2 DEBUG cand: {flow.src_ip}:{flow.src_port}->{flow.dst_ip}:{flow.dst_port} "
+                        f"fwd_pkts={flow.fwd_packets} bwd_pkts={flow.bwd_packets} "
+                        f"bytes={flow.fwd_bytes + flow.bwd_bytes} "
+                        f"claimed_dst={flow.dst_ip in claimed_dsts} claimed_src={flow.src_ip in claimed_srcs}"
+                    )
+
+                # --- Cross-detector suppression -------------------------------
+                # Skip endpoints already claimed by DDoS (victim) or PortScan
+                # (scanner source) this window — a flood/scan is not a beacon.
+                if flow.dst_ip in claimed_dsts or flow.src_ip in claimed_srcs:
+                    continue
+
+                # --- Failed / SYN-only connection guard -----------------------
+                # No response packets => the connection never established
+                # (scan probe or SYN flood). Real beacons get a reply.
+                if flow.bwd_packets == 0:
+                    continue
+
+                # --- Well-known service port guard ----------------------------
+                if flow.dst_port in C2_SKIP_PORTS:
+                    continue
+
+                # --- Flood-rate guard -----------------------------------------
+                # Beacons are LOW-and-slow. A single flow carrying a burst of
+                # packets in under a window is flood/scan noise, not a beacon.
+                duration = max(flow.last_time - flow.start_time, 0.001)
+                if total_pkts > 60 or (total_pkts / duration) > 50:
+                    continue
+
+                # --- Minimum payload guard ------------------------------------
+                nbytes = flow.fwd_bytes + flow.bwd_bytes
+                if nbytes < MIN_BYTES_PER_CONN:
+                    continue
+
                 self.c2_beacon_detector.observe(
                     src_ip=flow.src_ip,
                     dst_ip=flow.dst_ip,
                     dst_port=flow.dst_port,
                     ts=flow.start_time,
-                    nbytes=flow.fwd_bytes + flow.bwd_bytes,
+                    nbytes=nbytes,
                 )
 
             detections = self.c2_beacon_detector.scan()
@@ -630,6 +688,9 @@ class FeatureExtractor:
                     },
                 )
                 self._produce_alert(alert)
+                # Claim this scanner so its regularly-paced probes are not also
+                # scored as C2 beaconing.
+                self.window_claimed_srcs.add(window.src_ip)
                 logger.info(f"PortScan alert: src={window.src_ip}, conf={confidence:.3f}, "
                             f"ports={window.evidence.get('unique_dst_ports', 0)}")
 
@@ -1081,6 +1142,15 @@ class FeatureExtractor:
                 if elapsed >= WINDOW_SECONDS:
                     if packets_in_window > 0:
                         logger.debug(f"Window closed: {packets_in_window} packets in {elapsed:.1f}s")
+                        # Reset cross-detector suppression for this window.
+                        # DDoS runs first and claims flood destinations; the
+                        # portscan streaming path also claims scan destinations;
+                        # C2 then skips any claimed endpoint.
+                        self.window_claimed_dsts = set()
+                        # Note: window_claimed_srcs is populated continuously by
+                        # the streaming portscan path; snapshot & clear it here so
+                        # a scan detected during this window suppresses C2 for its
+                        # source, then reset for the next window.
                         self._score_ddos()
                         self._score_encrypted_malware()
                         self._score_exfiltration()

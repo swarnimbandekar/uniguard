@@ -1,0 +1,5 @@
+# The launcher itself uses only the Python standard library (tkinter, urllib,
+# subprocess, threading). No runtime dependencies.
+#
+# Building the .exe requires PyInstaller (build-time only):
+pyinstaller>=6.0

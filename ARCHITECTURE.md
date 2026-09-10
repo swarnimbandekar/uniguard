@@ -93,7 +93,7 @@ See each model's metadata JSON in `/ml-service/models` for exact features and th
 | `PortScan` | Logistic Regression (calibrated) | 18 | 0.60 | Streaming windower, Zeek conn_state approx |
 | `DDoS` | HistGradientBoosting | 31 | 0.92 | Per-destination aggregation for volumetric floods |
 | `DGA` | Gradient Boosting + n-grams | 19 + 200 | — | Runs via gRPC |
-| `C2_BEACONING` | Periodicity analysis | temporal | 0.70 | Inter-arrival jitter CV across repeated connections |
+| `C2_BEACONING` | Periodicity analysis | temporal | 0.70 | Inter-arrival jitter CV (≤0.40) across repeated **established** connections, temporally clustered, on non-standard ports |
 | `EncryptedMalware` | HistGradientBoosting | 31 | 0.28 | Non-standard-port flows; rule override for beacons |
 | `DataExfiltration` | HistGradientBoosting | 29 | 0.99 | Rule override for large asymmetric uploads |
 
@@ -102,6 +102,18 @@ All flow models are trained on synthetic behavioral data (`train_all_models.py`,
 minimum-volume guards to suppress false positives on real traffic.
 
 **Severity Mapping**: Confidence ≥ 0.95 → CRITICAL · ≥ 0.85 → HIGH · ≥ 0.70 → MEDIUM · below → LOW
+
+**Detector Coordination (avoiding cross-firing)**: The five local detectors run in a
+fixed order at each window boundary (DDoS → EncryptedMalware → Exfiltration → C2 Beacon),
+sharing a per-window suppression set. DDoS records its victim destinations and the
+streaming PortScan path records scanner sources; the C2 beacon scorer skips any claimed
+endpoint. In addition, a flow is only fed to the C2 tracker if it (a) received a response
+(not a SYN-only/failed probe), (b) carries a minimum payload, (c) is on a non-standard
+port, and (d) is low-rate. The beacon scorer further requires connections to be
+temporally clustered (bounded total span) so a slow trickle of unrelated connections is
+not assembled into a false beacon. Net effect: a port scan, DDoS flood, or
+encrypted-malware session each maps to its own alert class rather than all being
+reported as C2 beaconing.
 
 ---
 
@@ -149,7 +161,40 @@ minimum-volume guards to suppress false positives on real traffic.
 
 ---
 
-### 6. Messaging Infrastructure (Kafka)
+### 6. Desktop Console (`/launcher`)
+
+**Purpose**: A native Windows operator console that drives the whole stack from a
+single window — so a demo doesn't require juggling several terminals and a browser.
+
+**Technology**: Python + Tkinter (standard library only at runtime), packaged into a
+single-file `ThreatDetectionConsole.exe` via PyInstaller.
+
+**Two views (top nav bar):**
+- **Control Panel**: Start / Stop / Rebuild the Docker Compose pipeline, live service
+  health dots, demo & attack buttons (all 6 attacks + the capture-bridge starter), a
+  streamed console log, and a quick-open **Terminal** button. The left column is
+  scrollable so every control is reachable at any window size.
+- **Dashboard**: An embedded live SOC view rendered with Tkinter canvas charts (donut
+  threat distribution, alert-rate line chart, severity + top-source bars, animated stat
+  cards, live alert feed). Polls the backend REST API every ~3s.
+
+**Design Decisions**:
+- Orchestration only — the launcher runs `docker compose`, the helper scripts, and reads
+  the backend API. It never captures or writes network traffic itself, preserving the
+  system's passive/read-only model.
+- Resolves the project root by searching upward for `docker-compose.yml`, so it works
+  whether run from source (`python launcher/app.py`) or as the frozen `.exe`.
+- Forces UTF-8 on child processes so helper scripts that print Unicode never crash on a
+  legacy console codec.
+
+**Distribution note**: The unsigned, freshly-built `.exe` may be blocked by Windows
+Smart App Control or flagged by SmartScreen (no publisher reputation yet). Running from
+source (`python launcher/app.py`) avoids this; code-signing (EV certificate) removes it
+for distribution. See `launcher/README.md`.
+
+---
+
+### 7. Messaging Infrastructure (Kafka)
 
 **Configuration**: Apache Kafka 3.7 in KRaft mode (no Zookeeper dependency).
 
@@ -172,10 +217,16 @@ PCAP / Live Capture → [Ingest] → Kafka:flow-records → [Feature Extractor +
                                                               ▼
                                                        Kafka:threat-alerts
                                                               ▼
-                                                       [FastAPI Backend]
-                                                              ▼
-                                                       WebSocket → [React Dashboard]
+                                                       [FastAPI Backend] ──── REST/WS ────┐
+                                                              ▼                            ▼
+                                                       WebSocket → [React Dashboard]   [Desktop Console (.exe)]
+                                                                                        embedded dashboard +
+                                                                                        pipeline orchestration
 ```
+
+The Desktop Console sits alongside the browser dashboard: it reads the same backend REST
+API for its embedded live view and drives `docker compose` + the helper scripts to
+operate the pipeline. It is an operator front-end, not part of the detection data path.
 
 ## Security Model
 
@@ -188,7 +239,13 @@ PCAP / Live Capture → [Ingest] → Kafka:flow-records → [Feature Extractor +
 
 Single-machine deployment via Docker Compose. All services communicate over a private Docker bridge network (`threatnet`). External access only via:
 - Port 3000: Dashboard (nginx)
-- Port 8000: API (for debugging/testing)
+- Port 8001: API (host port; maps to backend container port 8000)
+
+Optionally, the **Desktop Console** (`launcher/`) runs on the host — either from source
+(`python launcher/app.py`) or as `launcher/dist/ThreatDetectionConsole.exe` — to start
+the stack, monitor health, and view alerts without a browser. The live capture bridge
+(`scripts/live_capture.py`) also runs on the host (as Administrator) since Docker cannot
+access host network interfaces on Windows.
 
 For production, services would be distributed across multiple hosts with Kafka cluster replication.
 

@@ -30,3 +30,7 @@ dashboard/dist/
 .vscode/
 .idea/
 .kiro/
+
+# Launcher build artifacts
+launcher/build/
+launcher/dist/

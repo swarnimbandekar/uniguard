@@ -41,6 +41,14 @@ import threading
 from datetime import datetime
 from collections import defaultdict
 
+# Force UTF-8 output so Unicode characters never crash on a cp1252 console
+# (e.g. when this script is launched as a subprocess by the desktop launcher).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 try:
     from scapy.all import sniff, IP, TCP, UDP, DNS, DNSQR, conf
 except ImportError:
@@ -308,7 +316,7 @@ def print_stats_loop():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Live network capture → Kafka → ML Pipeline → Dashboard",
+        description="Live network capture -> Kafka -> ML Pipeline -> Dashboard",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 EXAMPLES:
@@ -319,9 +327,9 @@ EXAMPLES:
   python scripts/live_capture.py --interface "Wi-Fi" --target 192.168.56.1
 
   # Then in another terminal, run attacks:
-  nmap -sS 192.168.56.1          → triggers PortScan detection
-  hping3 -S --flood 192.168.56.1 → triggers DDoS detection
-  nslookup x8k2m9q.com           → triggers DGA detection
+  nmap -sS 192.168.56.1          -> triggers PortScan detection
+  hping3 -S --flood 192.168.56.1 -> triggers DDoS detection
+  nslookup x8k2m9q.com           -> triggers DGA detection
 
 DASHBOARD: http://localhost:3000
         """
@@ -373,7 +381,7 @@ DASHBOARD: http://localhost:3000
 
     # Start capture
     print(f"[+] Starting capture on '{args.interface}'...")
-    print(f"[+] Traffic flows: Network → This Script → Kafka → ML Models → Dashboard")
+    print(f"[+] Traffic flows: Network -> This Script -> Kafka -> ML Models -> Dashboard")
     print(f"[+] Press Ctrl+C to stop\n")
 
     try:
@@ -388,7 +396,7 @@ DASHBOARD: http://localhost:3000
         print("\n\n[+] Stopping capture...")
     except PermissionError:
         print("\n[!] ERROR: Need admin privileges to capture packets.")
-        print("    Run this script as Administrator (right-click → Run as Administrator)")
+        print("    Run this script as Administrator (right-click -> Run as Administrator)")
         sys.exit(1)
     except Exception as e:
         print(f"\n[!] Capture error: {e}")

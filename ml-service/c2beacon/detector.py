@@ -45,17 +45,36 @@ class C2BeaconDetector:
 
     # Tuning parameters
     MIN_BEACONS = 5           # need at least this many connections to assess periodicity
-    MAX_JITTER_CV = 0.35      # coefficient of variation below this = regular beacon
-    MIN_INTERVAL = 0.5        # ignore intervals shorter than this (not beaconing)
-    MAX_INTERVAL = 3600.0     # ignore intervals longer than an hour
-    PAIR_TTL = 1800.0         # evict endpoint pairs idle for 30 min
+    # Coefficient of variation below this = regular beacon. Real C2 frameworks add
+    # timing jitter (often 10-30%), and LIVE capture adds OS/connect latency on top.
+    # 0.45 tolerates real-world jitter while staying below bursty/random human
+    # traffic (CV > 1.0). The feature-extractor also applies cross-detector and
+    # flow-quality guards BEFORE feeding events here, so this stage sees only
+    # clean, established, low-rate connections.
+    MAX_JITTER_CV = 0.40
+    MIN_INTERVAL = 1.0        # ignore sub-second spacing (flood/scan bursts, not beacons)
+    # Cap the usable interval so a slow TRICKLE of unrelated connections (e.g. a
+    # handful of sparse sessions dribbling in over minutes) cannot be assembled
+    # into a fake beacon. A genuine demo/C2 beacon checks in on a tight cadence,
+    # so its intervals sit well under this.
+    MAX_INTERVAL = 15.0
+    MIN_MEAN_INTERVAL = 1.0   # a true beacon phones home every second+, not bursts
+    MIN_TOTAL_BYTES = 200     # reject near-empty periodic noise
+    MIN_BEACONS_STRICT = 6    # require a few more events than the bare minimum
+    MAX_TOTAL_SPAN = 180.0    # all beacons must fall within this many seconds
+    PAIR_TTL = 300.0          # evict endpoint pairs idle for 5 min (was 30 min);
+    #                           short enough to stop stale sparse connections from
+    #                           accumulating, long enough not to evict a valid,
+    #                           recently-active beacon between windows.
 
     def __init__(self):
         self.trackers: Dict[Tuple[str, str, int], BeaconTracker] = {}
         self.model_name = "c2_beacon_periodicity"
         self.threshold = 0.7
-        logger.info("Loaded C2 Beacon detector (periodicity analysis)")
-        logger.info(f"  Min beacons: {self.MIN_BEACONS}, Max jitter CV: {self.MAX_JITTER_CV}")
+        logger.info("Loaded C2 Beacon detector (periodicity analysis, hardened)")
+        logger.info(f"  Min beacons: {self.MIN_BEACONS_STRICT}, Max jitter CV: "
+                    f"{self.MAX_JITTER_CV}, Max interval: {self.MAX_INTERVAL}s, "
+                    f"Max span: {self.MAX_TOTAL_SPAN}s")
 
     def observe(self, src_ip: str, dst_ip: str, dst_port: int, ts: float, nbytes: int):
         """Record a connection event between src and dst."""
@@ -75,19 +94,35 @@ class C2BeaconDetector:
         Returns evidence dict if it looks like beaconing, else None.
         """
         times = sorted(tr.connect_times)
-        if len(times) < self.MIN_BEACONS:
+        if len(times) < self.MIN_BEACONS_STRICT:
+            return None
+
+        # Require the beacons to be temporally clustered. A real beacon fires a
+        # steady stream within a bounded span; unrelated sparse connections spread
+        # over a long period are NOT a beacon even if the average looks regular.
+        total_span = times[-1] - times[0]
+        if total_span > self.MAX_TOTAL_SPAN:
             return None
 
         # Compute inter-connection intervals
         intervals = np.diff(times)
         # Keep only plausible beacon intervals
         intervals = intervals[(intervals >= self.MIN_INTERVAL) & (intervals <= self.MAX_INTERVAL)]
-        if len(intervals) < self.MIN_BEACONS - 1:
+        if len(intervals) < self.MIN_BEACONS_STRICT - 1:
             return None
 
         mean_iv = float(np.mean(intervals))
         std_iv = float(np.std(intervals))
         if mean_iv <= 0:
+            return None
+
+        # Reject burst-spaced connections (floods/scans hammer sub-second); a
+        # genuine beacon phones home on a human-scale cadence.
+        if mean_iv < self.MIN_MEAN_INTERVAL:
+            return None
+
+        # Reject near-empty periodic noise — beacons carry a real (if small) payload.
+        if tr.total_bytes < self.MIN_TOTAL_BYTES:
             return None
 
         # Coefficient of variation — low = very regular = beaconing
@@ -121,6 +156,11 @@ class C2BeaconDetector:
         detections = []
         stale = []
 
+        # DEBUG: report tracker state
+        if self.trackers:
+            summary = {str(k): len(v.connect_times) for k, v in list(self.trackers.items())[:5]}
+            logger.info(f"C2 DEBUG scan: {len(self.trackers)} trackers, sample={summary}")
+
         for key, tr in self.trackers.items():
             # Evict stale pairs
             if now - tr.last_seen > self.PAIR_TTL:
@@ -131,6 +171,21 @@ class C2BeaconDetector:
             if ev is not None:
                 src_ip, dst_ip, dst_port = key
                 detections.append((src_ip, dst_ip, dst_port, ev))
+            elif len(tr.connect_times) >= 2:
+                # DEBUG: explain why a multi-event pair didn't score
+                t = sorted(tr.connect_times)
+                span = t[-1] - t[0]
+                ivs = np.diff(t)
+                ivs_f = ivs[(ivs >= self.MIN_INTERVAL) & (ivs <= self.MAX_INTERVAL)]
+                m = float(np.mean(ivs_f)) if len(ivs_f) else 0.0
+                cv = (float(np.std(ivs_f)) / m) if m > 0 else -1
+                logger.info(
+                    f"C2 DEBUG pair {key}: events={len(t)} span={span:.1f}s "
+                    f"usable_ivs={len(ivs_f)} mean_iv={m:.2f} cv={cv:.3f} "
+                    f"bytes={tr.total_bytes} "
+                    f"(need events>={self.MIN_BEACONS_STRICT} span<={self.MAX_TOTAL_SPAN} "
+                    f"cv<={self.MAX_JITTER_CV})"
+                )
 
         for key in stale:
             self.trackers.pop(key, None)

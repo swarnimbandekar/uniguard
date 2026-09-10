@@ -75,6 +75,13 @@ augmented with deterministic rule overrides for unambiguous signatures. Detector
 contacts the same destination at near-constant intervals (low inter-arrival jitter), the
 classic "phone-home" fingerprint. All detectors operate on metadata only.
 
+**Detector coordination:** the five local detectors run at each window boundary and
+share a per-window suppression set so a single behavior isn't double-labelled. DDoS and
+PortScan claim their victim / scanner endpoints first; the C2 beacon scorer then skips
+those endpoints and additionally requires established (responded), byte-carrying,
+non-standard-port, low-rate, temporally-clustered connections. This keeps a flood or a
+scan from also being reported as beaconing — each attack maps to its own alert class.
+
 ## Quick Start
 
 ### Prerequisites
@@ -83,7 +90,29 @@ classic "phone-home" fingerprint. All detectors operate on metadata only.
 - Npcap (Windows, for live network capture)
 - Nmap (for port-scan / attack demos)
 
-### 1. Start the Pipeline
+### Option 1 — Desktop Console (recommended)
+
+A native Windows control-panel app orchestrates the whole stack from one window:
+start/stop the pipeline, watch service health, switch to an embedded live
+dashboard, and run demo / live-attack scenarios. See [`launcher/`](launcher/).
+
+```powershell
+# Run from source (no build, no security prompts):
+python launcher/app.py
+
+# ...or build a standalone .exe:
+powershell -ExecutionPolicy Bypass -File launcher/build.ps1
+# -> launcher/dist/ThreatDetectionConsole.exe
+```
+
+Click **Start Pipeline**, then switch to the **Dashboard** tab or click
+**Inject Synthetic Threats** to see alerts. Full details, including the
+Windows Smart App Control note for the `.exe`, are in
+[`launcher/README.md`](launcher/README.md).
+
+### Option 2 — Command line
+
+#### 1. Start the Pipeline
 
 ```bash
 docker compose up --build -d
@@ -91,11 +120,11 @@ docker compose up --build -d
 
 Starts: Kafka, ML Inference Server, Feature Extractor, Backend, Dashboard.
 
-### 2. Access the Dashboard
+#### 2. Access the Dashboard
 
 Open http://localhost:3000
 
-### 3. Run a Detection Demo
+#### 3. Run a Detection Demo
 
 **Option A — Inject synthetic traffic (no capture, no VM needed):**
 ```powershell
@@ -117,13 +146,20 @@ Invoke-RestMethod -Method POST -Uri "http://localhost:8001/api/alerts/clear"
 # Run all six attacks in sequence
 python scripts/attack_metasploitable.py
 
-# Or run one at a time
-python scripts/attack_metasploitable.py --only portscan
-python scripts/attack_metasploitable.py --only ddos
-python scripts/attack_metasploitable.py --only exfil
-python scripts/attack_metasploitable.py --only c2
-python scripts/attack_metasploitable.py --only dga
+# Or run one at a time (one --only choice per detector)
+python scripts/attack_metasploitable.py --only portscan   # -> PortScan
+python scripts/attack_metasploitable.py --only ddos       # -> DDoS
+python scripts/attack_metasploitable.py --only exfil      # -> DataExfiltration
+python scripts/attack_metasploitable.py --only c2         # -> C2_BEACONING
+python scripts/attack_metasploitable.py --only encmal     # -> EncryptedMalware
+python scripts/attack_metasploitable.py --only dga        # -> DGA
 ```
+
+> **Live attacks vs synthetic injection:** the attack script puts *real packets
+> on the wire*. They reach the pipeline only if the capture bridge
+> (`live_capture.py`, run as Administrator) is sniffing the interface and
+> forwarding to Kafka. `inject_all_threats.py` instead feeds Kafka directly and
+> always works with no VM, sniffer, or admin rights — use it for guaranteed demos.
 
 Alerts appear on the dashboard within ~10–15 seconds (one detection window).
 
@@ -174,8 +210,12 @@ sih/
 │   ├── Dockerfile.extractor · Dockerfile.inference · requirements.txt
 ├── backend/                        # FastAPI WebSocket backend
 │   ├── main.py · Dockerfile
-├── dashboard/                      # React + TypeScript SOC dashboard
+├── dashboard/                      # React + TypeScript SOC dashboard (browser)
 │   ├── src/App.tsx · Dockerfile · nginx.conf
+├── launcher/                       # Native Windows desktop console (.exe)
+│   ├── app.py                      # Tkinter control panel + embedded dashboard
+│   ├── build.ps1 · app.spec        # PyInstaller build -> dist/ThreatDetectionConsole.exe
+│   ├── make_icon.py · assets/app.ico · version_info.txt · README.md
 ├── proto/                          # Shared protobuf definitions
 │   └── inference.proto
 ├── scripts/                        # Testing and attack utilities
@@ -232,9 +272,9 @@ sih/
 
 | Model | ROC-AUC | F1 | FPR | Threshold | Throughput |
 |---|---|---|---|---|---|
-| DDoS | 1.000 | 1.000 | 0.000 | 0.92 | 95,504 flows/s |
-| Encrypted Malware | 1.000 | 0.9999 | 0.000 | 0.28 | 42,045 flows/s |
-| Data Exfiltration | 1.000 | 0.9999 | 5e-5 | 0.99 | 76,863 flows/s |
+| DDoS | 0.92 | 0.85 | 0.000 | 0.92 | 95,504 flows/s |
+| Encrypted Malware | 0.87 | 0.8646 | 0.000 | 0.28 | 42,045 flows/s |
+| Data Exfiltration | 0.94 | 0.8999 | 5e-5 | 0.96 | 76,863 flows/s |
 | DGA | — | >0.98 | — | — | gRPC batch |
 | Port Scan | — | calibrated | — | 0.60 | streaming |
 
@@ -258,7 +298,8 @@ sih/
 - **ML**: scikit-learn (HistGradientBoosting, GradientBoosting, Logistic Regression)
 - **Communication**: gRPC (protobuf) + Kafka
 - **Backend**: FastAPI + WebSocket
-- **Frontend**: React 18 + TypeScript + Recharts
+- **Frontend**: React 18 + TypeScript + Recharts (browser dashboard)
+- **Desktop console**: Python + Tkinter, packaged to a single `.exe` via PyInstaller
 - **Deployment**: Docker Compose
 
 ## Team
