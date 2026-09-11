@@ -60,6 +60,12 @@ EXFILTRATION_MODEL_PATH = Path(os.environ.get("EXFILTRATION_MODEL_PATH", "/app/m
 C2_MODEL_PATH = Path(os.environ.get("C2_MODEL_PATH", "/app/models/c2_detector_60s_10s_ext13.joblib"))  # STANDBY
 C2_INTERNAL_PREFIXES = os.environ.get("C2_INTERNAL_PREFIXES", "")  # STANDBY
 
+# Well-known service ports excluded from C2 beacon consideration (a covert C2
+# channel does not phone home over web/mail/SSH/etc.). Shared by the packet-level
+# connection recorder and the window-boundary beacon scorer.
+_C2_STD_PORTS = {80, 443, 22, 25, 53, 110, 143, 993, 995, 3389,
+                 8080, 8443, 445, 139, 135}
+
 
 @dataclass
 class FlowState:
@@ -106,6 +112,13 @@ class FeatureExtractor:
         self.flows: Dict[str, FlowState] = {}
         self.source_ips: Dict[str, SourceIPState] = defaultdict(SourceIPState)
         self.dns_queries: List[dict] = []
+        # Accurate per-connection start times for C2 beacon periodicity, captured
+        # at the packet level from the initiating SYN. The flow table merges
+        # connections that reuse an ephemeral source port within a window, which
+        # destroys the true inter-connection spacing a beacon detector needs; this
+        # SYN-driven record preserves one timestamp per real connection attempt.
+        # Keyed by (src_ip, dst_ip, dst_port) -> list[float ts]. Drained each window.
+        self.c2_conn_events: Dict[tuple, list] = defaultdict(list)
         # Per-window cross-detector suppression: destination endpoints already
         # claimed by DDoS or PortScan this window are excluded from C2 beacon
         # scoring, so a flood/scan can't ALSO be mislabelled as beaconing.
@@ -190,7 +203,7 @@ class FeatureExtractor:
                 )
                 self.portscan_windower = StreamingWindower(
                     spec=self.portscan_detector.window_spec,
-                    lateness_seconds=5.0,
+                    lateness_seconds=3.0,
                     stats=StreamStats(),
                 )
                 logger.info(f"Loaded PortScan model: {self.portscan_detector.model_name}")
@@ -242,6 +255,69 @@ class FeatureExtractor:
             return
 
         alerts_produced = 0
+
+        # --- Repeated encrypted-session pattern (runs before C2) --------------
+        # An encrypted-malware channel opens repeated sessions to a non-standard
+        # port, each carrying a real (encrypted-looking) DATA exchange: several
+        # PSH data packets and hundreds of payload bytes per session. A C2 beacon,
+        # by contrast, is a tiny uniform check-in (a packet or two, tens of bytes).
+        # Both are periodic on non-std ports, so per-flow scoring alone cannot tell
+        # them apart. Here we aggregate per endpoint and, when the repeated-session
+        # DATA signature is present, emit EncryptedMalware and CLAIM the endpoint
+        # so the C2 scorer skips it — keeping each attack in its own alert class.
+        C2_STD = _C2_STD_PORTS
+        with self.lock:
+            em_agg = {}  # (src,dst,dport) -> aggregate session stats
+            for key, flow in self.flows.items():
+                if flow.protocol != 6 or flow.dst_port in C2_STD or flow.dst_port <= 1024:
+                    continue
+                if flow.bwd_packets == 0:  # never established
+                    continue
+                a = em_agg.setdefault((flow.src_ip, flow.dst_ip, flow.dst_port), {
+                    "sessions": 0, "bytes": 0, "psh": 0, "pkts": 0,
+                })
+                a["sessions"] += 1
+                a["bytes"] += flow.fwd_bytes + flow.bwd_bytes
+                a["psh"] += flow.psh_count
+                a["pkts"] += flow.fwd_packets + flow.bwd_packets
+
+            for (src_ip, dst_ip, dport), a in em_agg.items():
+                if a["sessions"] < 3:
+                    continue
+                bytes_per_conn = a["bytes"] / a["sessions"]
+                psh_per_conn = a["psh"] / a["sessions"]
+                # Encrypted-malware session signature: each session carries a real
+                # data exchange (multiple PSH data packets, substantial payload).
+                # The threshold sits well above a C2 check-in (~1-2 pkts / tens of
+                # bytes) so genuine tiny beacons are left for the C2 detector.
+                if bytes_per_conn >= 700 and psh_per_conn >= 3:
+                    score = 0.90
+                    severity = self.encrypted_malware_detector.severity(score)
+                    alert = self._create_alert(
+                        threat_class="EncryptedMalware",
+                        confidence=score,
+                        severity=severity,
+                        src_ip=src_ip,
+                        dst_ip=dst_ip,
+                        src_port=0,
+                        dst_port=dport,
+                        evidence={
+                            "session_count": a["sessions"],
+                            "bytes_per_session": round(bytes_per_conn, 1),
+                            "psh_per_session": round(psh_per_conn, 1),
+                            "total_bytes": a["bytes"],
+                            "dst_port": dport,
+                        },
+                    )
+                    self._produce_alert(alert)
+                    alerts_produced += 1
+                    # Claim so the C2 beacon scorer skips this endpoint.
+                    self.window_claimed_dsts.add(dst_ip)
+                    logger.info(
+                        f"EncryptedMalware alert (repeated session): {src_ip}->"
+                        f"{dst_ip}:{dport} sessions={a['sessions']} "
+                        f"bytes/conn={bytes_per_conn:.0f} psh/conn={psh_per_conn:.1f}"
+                    )
 
         with self.lock:
             for key, flow in self.flows.items():
@@ -312,22 +388,67 @@ class FeatureExtractor:
                     "pkts": 0, "bytes": 0, "flows": 0, "syn": 0,
                     "first_ts": flow.start_time, "last_ts": flow.last_time,
                     "dst_port": flow.dst_port, "src_ip": flow.src_ip,
+                    "dst_ports": set(), "resp_pkts": 0,
                 })
                 d["pkts"] += flow.fwd_packets + flow.bwd_packets
                 d["bytes"] += flow.fwd_bytes + flow.bwd_bytes
                 d["flows"] += 1
                 d["syn"] += flow.syn_count
+                d["dst_ports"].add(flow.dst_port)
+                d["resp_pkts"] += flow.bwd_packets
                 d["first_ts"] = min(d["first_ts"], flow.start_time)
                 d["last_ts"] = max(d["last_ts"], flow.last_time)
 
             for dst_ip, d in dst_agg.items():
                 duration = max(d["last_ts"] - d["first_ts"], 0.001)
                 pkt_rate = d["pkts"] / duration
-                # Volumetric DDoS signature: high aggregate packet rate OR
-                # a flood of many connections to one victim in a short time.
+
+                # --- Port-scan exclusion -------------------------------------
+                # A port scan also produces "many short connections to one host
+                # quickly", but its signature is fan-out across MANY distinct
+                # destination ports with near-zero payload. A volumetric/
+                # connection flood instead concentrates on ONE (or a few) ports
+                # and moves real volume. Skip the scan pattern so it is left for
+                # the PortScan detector instead of being mislabelled as DDoS.
+                unique_dports = len(d["dst_ports"])
+                # Broad destination-port fan-out from one source to one host is
+                # the defining signature of a port scan, whether the scanned
+                # ports are closed (tiny SYN/RST probes) or open (they reply with
+                # data). A volumetric flood, by contrast, concentrates on one or a
+                # few service ports. So fan-out ALONE is decisive here — do not
+                # also require tiny packets / no responses, since scanning a host
+                # with many OPEN ports (e.g. Metasploitable) produces real replies
+                # and would otherwise slip through and be mislabelled DDoS.
+                looks_like_scan = unique_dports >= 20
+                if looks_like_scan:
+                    # Claim the scanner source so C2 beacon scoring also skips it.
+                    self.window_claimed_srcs.add(d["src_ip"])
+                    continue
+
+                # --- Data-exfiltration exclusion -----------------------------
+                # A single high-throughput connection with a strongly asymmetric
+                # UPLOAD is exfiltration, not a volumetric DDoS. A real flood is
+                # made of MANY connections (or sources) hammering a victim; one
+                # fat upload flow is the exfil detector's job. Without this, a
+                # bulk upload trips the "sustained high rate" branch below and
+                # gets double-labelled DDoS + DataExfiltration.
+                fwd = sum(f.fwd_bytes for f in self.flows.values()
+                          if f.dst_ip == dst_ip and f.protocol == 6)
+                bwd = sum(f.bwd_bytes for f in self.flows.values()
+                          if f.dst_ip == dst_ip and f.protocol == 6)
+                asymmetric_upload = fwd > 100_000 and fwd > 4 * max(bwd, 1)
+                if d["flows"] <= 3 and asymmetric_upload:
+                    continue
+
+                # Volumetric DDoS signature: high aggregate packet rate from a
+                # flood of MANY connections, OR a connection flood to one victim
+                # in a short time. Require multiple connections so a single fat
+                # flow (bulk download/upload) is not mistaken for a flood, and
+                # keep it concentrated on a few ports (a flood hammers a service;
+                # a scan sprays ports).
                 is_flood = (
-                    (d["pkts"] >= 500 and pkt_rate >= 200)  # sustained high rate
-                    or (d["flows"] >= 200 and duration < 15)  # connection flood
+                    (d["pkts"] >= 500 and pkt_rate >= 200 and d["flows"] >= 10)  # sustained high-rate flood
+                    or (d["flows"] >= 200 and duration < 15 and unique_dports <= 5)  # connection flood on few ports
                 )
                 if not is_flood:
                     continue
@@ -445,58 +566,91 @@ class FeatureExtractor:
         with self.lock:
             claimed_dsts = set(self.window_claimed_dsts)
             claimed_srcs = set(self.window_claimed_srcs)
-            # Record each qualifying TCP flow as a beacon connection event.
+
+            # Build a per-endpoint summary from this window's flows, used to
+            # QUALIFY an endpoint (established, byte-carrying, non-std port,
+            # low-rate). The actual beacon TIMESTAMPS come from the packet-level
+            # SYN recorder (self.c2_conn_events), which preserves one timestamp
+            # per real connection — the flow table merges source-port reuse and
+            # would otherwise collapse ~6 beacons/window into 1-2 events and
+            # inflate the measured interval.
+            endpoint = {}  # (src,dst,dport) -> {resp, bytes, total_pkts, dur, avg_bytes}
             for key, flow in self.flows.items():
                 if flow.protocol != 6:
                     continue
-                total_pkts = flow.fwd_packets + flow.bwd_packets
-                if total_pkts < 1:
-                    continue
+                ek = (flow.src_ip, flow.dst_ip, flow.dst_port)
+                e = endpoint.setdefault(ek, {"resp": 0, "bytes": 0, "pkts": 0,
+                                             "dur": 0.0, "flows": 0,
+                                             "estab": 0, "rst": 0, "data_bytes": 0})
+                e["resp"] += flow.bwd_packets
+                e["bytes"] += flow.fwd_bytes + flow.bwd_bytes
+                e["pkts"] += flow.fwd_packets + flow.bwd_packets
+                e["dur"] += max(flow.last_time - flow.start_time, 0.0)
+                e["flows"] += 1
+                e["rst"] += flow.rst_count
+                # An ESTABLISHED beacon connection exchanges data beyond the
+                # 3-way handshake: it carries a PSH data packet in at least one
+                # direction. A connection to a CLOSED port is SYN -> RST with no
+                # data (psh_count == 0), which must NOT count as a beacon check-in.
+                if flow.psh_count > 0 and flow.bwd_packets > 0:
+                    e["estab"] += 1
+                    e["data_bytes"] += flow.fwd_bytes + flow.bwd_bytes
 
-                # DEBUG: log candidate beacon flows on non-std ports
-                if flow.dst_port not in C2_SKIP_PORTS and flow.dst_port > 1024:
-                    logger.info(
-                        f"C2 DEBUG cand: {flow.src_ip}:{flow.src_port}->{flow.dst_ip}:{flow.dst_port} "
-                        f"fwd_pkts={flow.fwd_packets} bwd_pkts={flow.bwd_packets} "
-                        f"bytes={flow.fwd_bytes + flow.bwd_bytes} "
-                        f"claimed_dst={flow.dst_ip in claimed_dsts} claimed_src={flow.src_ip in claimed_srcs}"
-                    )
+            # Drain the accurate per-connection SYN timestamps for this window.
+            conn_events = {k: sorted(v) for k, v in self.c2_conn_events.items()}
+            self.c2_conn_events = defaultdict(list)
+
+            for ek, times in conn_events.items():
+                src_ip, dst_ip, dst_port = ek
 
                 # --- Cross-detector suppression -------------------------------
-                # Skip endpoints already claimed by DDoS (victim) or PortScan
-                # (scanner source) this window — a flood/scan is not a beacon.
-                if flow.dst_ip in claimed_dsts or flow.src_ip in claimed_srcs:
-                    continue
-
-                # --- Failed / SYN-only connection guard -----------------------
-                # No response packets => the connection never established
-                # (scan probe or SYN flood). Real beacons get a reply.
-                if flow.bwd_packets == 0:
+                if dst_ip in claimed_dsts or src_ip in claimed_srcs:
                     continue
 
                 # --- Well-known service port guard ----------------------------
-                if flow.dst_port in C2_SKIP_PORTS:
+                if dst_port in C2_SKIP_PORTS:
+                    continue
+
+                e = endpoint.get(ek)
+                # --- Established / byte-carrying guard ------------------------
+                # The endpoint must have ESTABLISHED, data-carrying connections
+                # (a real beacon completes the handshake and exchanges a small
+                # payload). A SYN flood/scan, or repeated connects to a CLOSED
+                # port (SYN -> RST, no data), must NOT be scored as beaconing —
+                # otherwise regular failed connects masquerade as a beacon.
+                if e is None or e["estab"] == 0 or e["data_bytes"] < MIN_BYTES_PER_CONN:
+                    continue
+                # Require MOST connection attempts to have established. A port
+                # that mostly RSTs is closed, not a beacon destination.
+                if e["estab"] < 0.5 * e["flows"]:
+                    continue
+
+                # --- Per-connection payload guard -----------------------------
+                avg_bytes = e["bytes"] / max(e["flows"], 1)
+                if avg_bytes < MIN_BYTES_PER_CONN:
                     continue
 
                 # --- Flood-rate guard -----------------------------------------
-                # Beacons are LOW-and-slow. A single flow carrying a burst of
-                # packets in under a window is flood/scan noise, not a beacon.
-                duration = max(flow.last_time - flow.start_time, 0.001)
-                if total_pkts > 60 or (total_pkts / duration) > 50:
+                # A beacon is low-and-slow: each check-in is a light session.
+                # Reject if any single connection carried a burst of packets.
+                if e["flows"] and (e["pkts"] / e["flows"]) > 60:
                     continue
 
-                # --- Minimum payload guard ------------------------------------
-                nbytes = flow.fwd_bytes + flow.bwd_bytes
-                if nbytes < MIN_BYTES_PER_CONN:
-                    continue
-
-                self.c2_beacon_detector.observe(
-                    src_ip=flow.src_ip,
-                    dst_ip=flow.dst_ip,
-                    dst_port=flow.dst_port,
-                    ts=flow.start_time,
-                    nbytes=nbytes,
+                # Per-connection byte share for the tracker's volume evidence.
+                per_conn_bytes = e["bytes"] / max(len(times), 1)
+                logger.info(
+                    f"C2 DEBUG cand: {src_ip}->{dst_ip}:{dst_port} "
+                    f"conn_events={len(times)} resp_pkts={e['resp']} "
+                    f"bytes={e['bytes']} claimed={dst_ip in claimed_dsts or src_ip in claimed_srcs}"
                 )
+                for ts in times:
+                    self.c2_beacon_detector.observe(
+                        src_ip=src_ip,
+                        dst_ip=dst_ip,
+                        dst_port=dst_port,
+                        ts=ts,
+                        nbytes=int(per_conn_bytes),
+                    )
 
             detections = self.c2_beacon_detector.scan()
 
@@ -565,6 +719,13 @@ class FeatureExtractor:
 
         # For UDP: emit a flow immediately (stateless)
         if proto == 17:
+            # Skip SERVER RESPONSES: a packet whose SOURCE port is a well-known
+            # service port (e.g. DNS :53) is a reply to a client, not a scan.
+            # Without this, a DNS server answering many ephemeral client ports
+            # looks like it is "scanning" those ports and trips a false PortScan.
+            src_port_int = pkt.get("src_port", 0)
+            if src_port_int in _C2_STD_PORTS or src_port_int == 53:
+                return
             flow = Flow(
                 ts=ts,
                 src_ip=src_ip,
@@ -579,6 +740,32 @@ class FeatureExtractor:
             self._emit_portscan_flow(flow)
             return
 
+        # --- C2 beacon connection-start capture (packet level) ----------------
+        # Record the initiating SYN (SYN set, ACK clear) of each TCP connection
+        # to a non-standard/high port. This gives the C2 detector the TRUE start
+        # time of every individual connection, independent of the flow table's
+        # source-port-reuse merging, so beacon intervals are measured accurately.
+        if flags.get("syn") and not flags.get("ack"):
+            dport_int = pkt["dst_port"]
+            if dport_int > 1024 and dport_int not in _C2_STD_PORTS:
+                with self.lock:
+                    self.c2_conn_events[(src_ip, dst_ip, dport_int)].append(ts)
+
+        # A port scan is measured by a SOURCE hitting many distinct DESTINATION
+        # ports. A busy server replying to many ephemeral client ports (e.g. the
+        # victim of a DDoS/HTTP flood answering ~1000 client sockets from :80)
+        # would otherwise look like that server "scanning" the client's ports.
+        # A packet FROM a well-known service port TO a high ephemeral port that
+        # is NOT an initiating SYN is a server reply, so it must never CREATE a
+        # new scanner record. It may still update an existing peer (below), which
+        # is what marks the real initiator's connection as established.
+        src_port_int = pkt.get("src_port", 0)
+        dst_port_int = pkt.get("dst_port", 0)
+        is_initiating_syn = flags.get("syn", False) and not flags.get("ack", False)
+        is_server_reply = (not is_initiating_syn
+                           and (src_port_int in _C2_STD_PORTS or src_port_int < 1024)
+                           and dst_port_int > 1024)
+
         # TCP: track connection state to approximate conn_state
         # Use directional key (src -> dst:port)
         tcp_key = f"{src_ip}->{dst_ip}:{dst_port}"
@@ -586,6 +773,17 @@ class FeatureExtractor:
 
         with self.lock:
             record = self._open_tcp_flows.get(tcp_key)
+
+            if record is None and is_server_reply:
+                # Server reply with no existing initiator record: update the peer
+                # (the real client's outbound flow) if present, but do NOT create
+                # a spurious server-as-scanner record.
+                peer = self._open_tcp_flows.get(reverse_key)
+                if peer is not None:
+                    peer["resp_pkts"] += 1.0
+                    if flags.get("syn") and flags.get("ack"):
+                        peer["syn_ack"] = True
+                return
 
             if record is None:
                 # New connection
@@ -660,6 +858,15 @@ class FeatureExtractor:
     def _emit_portscan_flow(self, flow: Flow):
         """Feed a flow to the streaming windower and produce alerts for any triggered windows."""
         windows = self.portscan_windower.push(flow)
+        self._score_portscan_windows(windows)
+
+    def _score_portscan_windows(self, windows):
+        """Score windower-released windows and produce PortScan alerts.
+
+        Shared by the push path (windows released as flows arrive) and the
+        boundary tick path (windows released by wall-clock once traffic stops,
+        so a scan burst that ends cleanly still gets scored).
+        """
         for window in windows:
             # Must have multiple unique destination ports to be a real scan
             unique_ports = window.evidence.get("unique_dst_ports", 0)
@@ -709,6 +916,31 @@ class FeatureExtractor:
             for key in stale_keys:
                 record = self._open_tcp_flows.pop(key)
                 self._emit_tcp_flow(key, record)
+
+    def _flush_open_scan_probes(self, current_ts: float):
+        """At a window boundary, emit still-open TCP connection records into the
+        portscan windower so a scan whose probes never got a RST/FIN (or whose
+        burst just ended) still contributes its flows to a scorable window.
+
+        Emits SYN-only / unestablished probes that are at least 1s old (the
+        signature of a scan), plus any flow idle > 3s. Leaves fresh, still-active
+        connections in place so genuine sessions aren't cut prematurely.
+        """
+        if self.portscan_detector is None:
+            return
+        emit_keys = []
+        with self.lock:
+            for key, record in self._open_tcp_flows.items():
+                age = current_ts - record["first_ts"]
+                idle = current_ts - record["last_ts"]
+                unestablished = not record["syn_ack"] and record["resp_pkts"] == 0
+                if (unestablished and age >= 1.0) or idle > 3.0:
+                    emit_keys.append(key)
+            emitted = [(k, self._open_tcp_flows.pop(k)) for k in emit_keys]
+        # Emit outside the lock (_emit_portscan_flow pushes into the windower,
+        # which is single-threaded here so this is safe and avoids re-entrancy).
+        for key, record in emitted:
+            self._emit_tcp_flow(key, record)
 
     def _flow_key(self, pkt: dict) -> str:
         """Generate flow key from packet (bidirectional)."""
@@ -788,16 +1020,27 @@ class FeatureExtractor:
             src_state.total_packets += 1
 
     def _process_dns(self, pkt: dict):
-        """Collect DNS queries for DGA detection, filtering out local/mDNS noise."""
+        """Collect DNS queries for DGA detection, filtering out local/mDNS noise.
+
+        Only the QUERY direction (client -> resolver, dst_port 53) is scored. A
+        DNS reply echoes the same question name back (src_port 53); counting both
+        would emit two identical DGA alerts per domain. Scoring the query only
+        keeps one alert per lookup.
+        """
         dns_query = pkt.get("dns_query")
-        if dns_query and not self._is_safe_domain(dns_query):
-            with self.lock:
-                self.dns_queries.append({
-                    "domain": dns_query,
-                    "src_ip": pkt["src_ip"],
-                    "dst_ip": pkt["dst_ip"],
-                    "timestamp_us": pkt["timestamp_us"],
-                })
+        if not dns_query or self._is_safe_domain(dns_query):
+            return
+        # Skip the reply direction (server answering from :53) to avoid
+        # double-counting each domain.
+        if pkt.get("src_port") == 53 and pkt.get("dst_port") != 53:
+            return
+        with self.lock:
+            self.dns_queries.append({
+                "domain": dns_query,
+                "src_ip": pkt["src_ip"],
+                "dst_ip": pkt["dst_ip"],
+                "timestamp_us": pkt["timestamp_us"],
+            })
 
     @staticmethod
     def _is_safe_domain(domain: str) -> bool:
@@ -1143,14 +1386,20 @@ class FeatureExtractor:
                     if packets_in_window > 0:
                         logger.debug(f"Window closed: {packets_in_window} packets in {elapsed:.1f}s")
                         # Reset cross-detector suppression for this window.
-                        # DDoS runs first and claims flood destinations; the
-                        # portscan streaming path also claims scan destinations;
-                        # C2 then skips any claimed endpoint.
+                        # PortScan runs FIRST and claims scanner sources, then
+                        # DDoS claims flood destinations; C2 then skips any
+                        # claimed endpoint. window_claimed_srcs is cleared here
+                        # so each window starts fresh.
                         self.window_claimed_dsts = set()
-                        # Note: window_claimed_srcs is populated continuously by
-                        # the streaming portscan path; snapshot & clear it here so
-                        # a scan detected during this window suppresses C2 for its
-                        # source, then reset for the next window.
+                        self.window_claimed_srcs = set()
+                        # Flush any still-open SYN-only scan probes into the
+                        # windower, then release windows that are complete under
+                        # the lateness allowance as of NOW. Without this, a scan
+                        # burst that ends cleanly (traffic then stops) leaves its
+                        # final window held forever and PortScan never fires.
+                        self._flush_open_scan_probes(time.time())
+                        released = self.portscan_windower.tick(time.time())
+                        self._score_portscan_windows(released)
                         self._score_ddos()
                         self._score_encrypted_malware()
                         self._score_exfiltration()

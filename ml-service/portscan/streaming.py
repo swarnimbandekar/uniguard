@@ -320,6 +320,29 @@ class StreamingWindower:
             released.extend(self._release(src_ip, state, float("inf")))
         return released
 
+    def tick(self, now_ts: float) -> list[Window]:
+        """Release windows already complete as of wall-clock ``now_ts``.
+
+        ``push`` only advances the watermark and releases windows when a flow
+        arrives.  On a live tail traffic can stop the instant an attack ends (a
+        port scan is a burst, then silence), which freezes the packet-time
+        watermark and leaves the final, fully-populated window held forever.
+
+        A wall-clock-driven caller (a window-boundary loop) calls ``tick`` with
+        the current time so the effective watermark keeps advancing in real time.
+        Packet timestamps from a live sniffer are wall-clock, so once ``now_ts``
+        is more than ``lateness_seconds`` past a window's end, that window is
+        complete and released -- without the all-or-nothing semantics of
+        ``flush`` (still-filling windows stay held).
+        """
+        self._watermark_source = max(self._watermark_source, now_ts)
+        watermark = self._watermark()
+        released: list[Window] = []
+        for src_ip in list(self._sources):
+            state = self._sources[src_ip]
+            released.extend(self._release(src_ip, state, watermark))
+        return released
+
     def windows(self, flows: Iterable[Flow]) -> Iterator[Window]:
         """Convenience: stream a finite iterable through and drain at the end."""
         for flow in flows:

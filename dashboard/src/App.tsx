@@ -211,6 +211,10 @@ export default function App() {
   const [tab, setTab] = useState(0)
   const [scope, setScope] = useState<'all' | 'crit'>('all')
   const [synced, setSynced] = useState(new Date())
+  /* Incident-ledger filters */
+  const [fClass, setFClass] = useState<string>('')
+  const [fSev, setFSev] = useState<string>('')
+  const [fQuery, setFQuery] = useState<string>('')
   const ws = useRef<WebSocket | null>(null)
   const retry = useRef<number | null>(null)
   const seen = useRef(0)
@@ -240,7 +244,7 @@ export default function App() {
         const d = JSON.parse(e.data)
         if (d.type === 'heartbeat' || d.type === 'pong') return
         const a = d as Alert
-        setAlerts(p => [a, ...p].slice(0, 400))
+        setAlerts(p => (p.some(x => x.alert_id === a.alert_id) ? p : [a, ...p]).slice(0, 5000))
         setSlots(p => {
           const t = hhmmss(new Date())
           const last = p[p.length - 1]
@@ -275,6 +279,25 @@ export default function App() {
     try {
       const r = await fetch('/api/stats')
       if (r.ok) { setStats(await r.json()); setSynced(new Date()) }
+    } catch { /* noop */ }
+    /* Pull the full alert history from REST so the ledger shows ALL logs the
+       backend retains, not just the live WebSocket buffer. Merge by alert_id. */
+    try {
+      const r = await fetch('/api/alerts?page=1&page_size=500')
+      if (r.ok) {
+        const data = await r.json()
+        const hist: Alert[] = data.alerts ?? []
+        if (hist.length) {
+          setAlerts(prev => {
+            const byId = new Map<string, Alert>()
+            for (const a of hist) byId.set(a.alert_id, a)
+            for (const a of prev) if (!byId.has(a.alert_id)) byId.set(a.alert_id, a)
+            return Array.from(byId.values())
+              .sort((x, y) => y.timestamp - x.timestamp)
+              .slice(0, 5000)
+          })
+        }
+      }
     } catch { /* noop */ }
   }, [])
 
@@ -328,9 +351,172 @@ export default function App() {
     (k: 'DDoS' | 'PortScan' | 'DGA' | 'EncryptedMalware' | 'DataExfiltration') => slots.slice(-18).map(s => ({ v: s[k] })),
     [slots]
   )
-  const rows = useMemo(
-    () => (scope === 'crit' ? alerts.filter(a => a.severity === 'CRITICAL') : alerts),
-    [alerts, scope]
+  /* Rows for the incident ledger: scope toggle + class/severity/text filters. */
+  const rows = useMemo(() => {
+    const q = fQuery.trim().toLowerCase()
+    return alerts.filter(a => {
+      if (scope === 'crit' && a.severity !== 'CRITICAL') return false
+      if (fClass && a.threat_class !== fClass) return false
+      if (fSev && a.severity !== fSev) return false
+      if (q) {
+        const hay = `${a.src_ip} ${a.dst_ip} ${a.flow_id} ${a.threat_class} ${a.src_port} ${a.dst_port}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [alerts, scope, fClass, fSev, fQuery])
+
+  /* Distinct threat classes present, for the filter dropdown. */
+  const classOptions = useMemo(() => {
+    const s = new Set<string>()
+    alerts.forEach(a => s.add(a.threat_class))
+    return Array.from(s).sort()
+  }, [alerts])
+
+  const filtersActive = scope === 'crit' || !!fClass || !!fSev || !!fQuery.trim()
+  const clearFilters = useCallback(() => {
+    setScope('all'); setFClass(''); setFSev(''); setFQuery('')
+  }, [])
+
+  /* Export the currently-filtered ledger rows to CSV and trigger a download. */
+  const exportCsv = useCallback(() => {
+    const cols = [
+      'timestamp_utc', 'threat_class', 'severity', 'confidence',
+      'src_ip', 'src_port', 'dst_ip', 'dst_port', 'flow_id',
+      'model_version', 'alert_id', 'evidence',
+    ]
+    const esc = (v: unknown) => {
+      const s = String(v ?? '')
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const lines = [cols.join(',')]
+    for (const a of rows) {
+      lines.push([
+        new Date(a.timestamp * 1000).toISOString(),
+        a.threat_class,
+        a.severity,
+        a.confidence,
+        a.src_ip,
+        a.src_port,
+        a.dst_ip,
+        a.dst_port,
+        a.flow_id,
+        a.model_version,
+        a.alert_id,
+        JSON.stringify(a.evidence),
+      ].map(esc).join(','))
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `incident-ledger-${ts}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }, [rows])
+
+  /* ── Incident ledger (filters + CSV export + full history) ── */
+  const ledgerFilters = (
+    <div className="ledger-filters">
+      <input
+        className="fld-input"
+        placeholder="Search IP, port, flow id…"
+        value={fQuery}
+        onChange={e => setFQuery(e.target.value)}
+      />
+      <select className="fld-select" value={fClass} onChange={e => setFClass(e.target.value)}>
+        <option value="">All classes</option>
+        {classOptions.map(c => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <select className="fld-select" value={fSev} onChange={e => setFSev(e.target.value)}>
+        <option value="">All severities</option>
+        {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map(s => <option key={s} value={s}>{s}</option>)}
+      </select>
+      {filtersActive && (
+        <button className="tool-btn" onClick={clearFilters} title="Clear all filters">✕ Clear</button>
+      )}
+      <button className="tool-btn export" onClick={exportCsv} disabled={!rows.length}
+        title="Export the filtered rows to CSV">⭳ Export CSV</button>
+    </div>
+  )
+
+  const ledgerTable = rows.length ? (
+    <div className="tbl-wrap all">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Source</th>
+            <th>Target</th>
+            <th>Threat class</th>
+            <th>Severity</th>
+            <th>ML confidence</th>
+            <th>Evidence features</th>
+            <th>Flow id</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(a => (
+            <tr key={a.alert_id} onClick={() => setSel(a)}
+              className={sel?.alert_id === a.alert_id ? 'sel' : ''}>
+              <td className="td-time">{hhmmss(new Date(a.timestamp * 1000))}</td>
+              <td className="td-ip">{a.src_ip}{a.src_port ? `:${a.src_port}` : ''}</td>
+              <td>
+                <span className="td-arrow">→</span>
+                <span className="td-ip">{a.dst_ip}{a.dst_port ? `:${a.dst_port}` : ''}</span>
+              </td>
+              <td>
+                <span className="tclass" style={{ color: TC[a.threat_class] ?? K.fg2 }}>
+                  <span className="tclass-sq" style={{ background: TC[a.threat_class] ?? K.mute }} />
+                  {a.threat_class}
+                </span>
+              </td>
+              <td><span className={`sevtag ${a.severity}`}>{a.severity}</span></td>
+              <td>
+                <span className="cf">
+                  <span className="cf-rail">
+                    <span className="cf-fill" style={{ width: `${a.confidence * 100}%`, background: confHue(a.confidence) }} />
+                  </span>
+                  <span className="cf-n">{(a.confidence * 100).toFixed(1)}%</span>
+                </span>
+              </td>
+              <td>
+                {Object.keys(a.evidence).slice(0, 2).map(k => (
+                  <span className="ftag" key={k}>{k}</span>
+                ))}
+                {Object.keys(a.evidence).length > 2 && (
+                  <span className="ftag">+{Object.keys(a.evidence).length - 2}</span>
+                )}
+              </td>
+              <td className="td-time">{a.flow_id}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <div className="blank">
+      <div className="blank-t">
+        {filtersActive ? 'No incidents match the current filters' : 'No incidents detected'}
+      </div>
+      <div className="blank-s">
+        {filtersActive ? 'adjust or clear the filters above' : 'enclave observing · alerts appear within one window'}
+      </div>
+    </div>
+  )
+
+  const IncidentLedger = (
+    <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
+      <Panel name={`Incident ledger — ${rows.length} record${rows.length === 1 ? '' : 's'}${filtersActive ? ' (filtered)' : ''}`}
+        tools={false}
+        foot="select a row to inspect flow, scores and supporting evidence · export honours active filters">
+        {ledgerFilters}
+        {ledgerTable}
+      </Panel>
+    </div>
   )
 
   return (
@@ -338,11 +524,11 @@ export default function App() {
       {/* ── Icon rail ── */}
       <nav className="rail">
         <div className="rail-logo">TL</div>
-        <button className="rail-btn on" title="Threat posture">◈</button>
-        <button className="rail-btn" title="Incidents">☰</button>
-        <button className="rail-btn" title="Engines">◉</button>
-        <button className="rail-btn" title="Flows">⇄</button>
-        <button className="rail-btn" title="Telemetry">◱</button>
+        <button className={`rail-btn ${tab === 0 ? 'on' : ''}`} title="Threat posture" onClick={() => setTab(0)}>◈</button>
+        <button className={`rail-btn ${tab === 1 ? 'on' : ''}`} title="Live feed" onClick={() => setTab(1)}>☰</button>
+        <button className={`rail-btn ${tab === 2 ? 'on' : ''}`} title="Detection engines" onClick={() => setTab(2)}>◉</button>
+        <button className={`rail-btn ${tab === 4 ? 'on' : ''}`} title="Flow records" onClick={() => setTab(4)}>⇄</button>
+        <button className={`rail-btn ${tab === 3 ? 'on' : ''}`} title="Telemetry" onClick={() => setTab(3)}>◱</button>
         <span className="rail-spacer" />
         <button className="rail-btn" title="Alerts">△</button>
         <button className="rail-btn" title="Settings">⚙</button>
@@ -375,7 +561,7 @@ export default function App() {
           <span className="tool-note">
             <span className="mono">Synced {hhmmss(synced)}</span>
             <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
-            <button className="ptool" title="Export">⭳</button>
+            <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
             <button className="ptool" title="Layout">⚙</button>
           </span>
         </div>
@@ -383,6 +569,7 @@ export default function App() {
         {/* ── Canvas ── */}
         <div className="canvas">
           {/* Pipeline health */}
+          {(tab === 0 || tab === 2) && (
           <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
             <Panel name="Pipeline health" tools={false}>
               <div className="health">
@@ -405,8 +592,10 @@ export default function App() {
               </div>
             </Panel>
           </div>
+          )}
 
           {/* KPI strip */}
+          {(tab === 0 || tab === 1 || tab === 3) && (
           <div className="grid g-kpi">
             <Kpi name="Total alerts" value={compact(total)}
               sub="since enclave start" spark={pulse} sparkColor={K.ok}
@@ -423,8 +612,10 @@ export default function App() {
             <Kpi name="Threat sources" value={compact(srcN)}
               sub="distinct origin addresses" spark={classSpark('DGA')} sparkColor={K.med} />
           </div>
+          )}
 
           {/* Timeline + distribution + severity */}
+          {(tab === 0 || tab === 1 || tab === 3) && (
           <div className="grid g-main">
             <Panel name="Alert volume over time — by threat class"
               foot={`${slots.length} windows retained · peak ${peak} alerts/window`}>
@@ -507,8 +698,56 @@ export default function App() {
               </div>
             </Panel>
           </div>
+          )}
+
+          {/* Telemetry: top sources + highest-risk */}
+          {tab === 3 && (
+            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <Panel name="Top source addresses" foot="ranked by alert count in buffer">
+                <div style={{ height: 220, padding: '12px 12px 0 0' }}>
+                  {topSrc.length ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={topSrc} layout="vertical" margin={{ top: 0, right: 14, left: 4, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="2 4" stroke={K.line} horizontal={false} />
+                        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
+                        <YAxis type="category" dataKey="ip" width={96} tickLine={false} axisLine={false} />
+                        <Tooltip content={<Tip />} cursor={{ fill: 'rgba(255,255,255,.03)' }} />
+                        <Bar dataKey="count" name="Alerts" radius={[0, 3, 3, 0]} barSize={13}>
+                          {topSrc.map((_, i) => (
+                            <Cell key={i} fill={i === 0 ? K.crit : i === 1 ? K.high : i === 2 ? K.med : K.dim} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : <div className="chart-blank">no sources observed</div>}
+                </div>
+              </Panel>
+              <Panel name="Highest-risk sources" foot="score = alert volume × mean confidence">
+                {topSrc.length ? topSrc.slice(0, 6).map((s, i) => {
+                  const hits = alerts.filter(a => a.src_ip === s.full)
+                  const mc = hits.length ? hits.reduce((x, a) => x + a.confidence, 0) / hits.length : 0
+                  const risk = Math.min(Math.round((s.count * 6) + mc * 40), 100)
+                  const hue = risk >= 80 ? K.crit : risk >= 55 ? K.high : K.med
+                  const cls = hits[0]?.threat_class
+                  return (
+                    <div className="rank" key={s.full}>
+                      <span className="rank-ord">{String(i + 1).padStart(2, '0')}</span>
+                      <div className="rank-body">
+                        <div className="rank-t">{s.full}</div>
+                        <div className="rank-s">{s.count} alerts{cls ? ` · ${cls}` : ''}</div>
+                      </div>
+                      <span className="rank-n" style={{ color: hue }}>{risk}</span>
+                    </div>
+                  )
+                }) : (
+                  <div className="blank"><div className="blank-t">No sources scored</div><div className="blank-s">awaiting alerts</div></div>
+                )}
+              </Panel>
+            </div>
+          )}
 
           {/* Sources + radar + modules + rank */}
+          {tab === 0 && (
           <div className="grid g-quad">
             <Panel name="Top source addresses" foot="ranked by alert count in buffer">
               <div style={{ height: 196, padding: '12px 12px 0 0' }}>
@@ -593,75 +832,109 @@ export default function App() {
               )}
             </Panel>
           </div>
+          )}
 
-          {/* Incident ledger */}
-          <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
-            <Panel name={`Incident ledger — ${rows.length} record${rows.length === 1 ? '' : 's'}`}
-              foot="select a row to inspect flow, scores and supporting evidence">
-              {rows.length ? (
-                <div className="tbl-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Time</th>
-                        <th>Source</th>
-                        <th>Target</th>
-                        <th>Threat class</th>
-                        <th>Severity</th>
-                        <th>ML confidence</th>
-                        <th>Evidence features</th>
-                        <th>Flow id</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.slice(0, 80).map(a => (
-                        <tr key={a.alert_id} onClick={() => setSel(a)}
-                          className={sel?.alert_id === a.alert_id ? 'sel' : ''}>
-                          <td className="td-time">{hhmmss(new Date(a.timestamp * 1000))}</td>
-                          <td className="td-ip">{a.src_ip}{a.src_port ? `:${a.src_port}` : ''}</td>
-                          <td>
-                            <span className="td-arrow">→</span>
-                            <span className="td-ip">{a.dst_ip}{a.dst_port ? `:${a.dst_port}` : ''}</span>
-                          </td>
-                          <td>
-                            <span className="tclass" style={{ color: TC[a.threat_class] ?? K.fg2 }}>
-                              <span className="tclass-sq" style={{ background: TC[a.threat_class] ?? K.mute }} />
-                              {a.threat_class}
-                            </span>
-                          </td>
-                          <td><span className={`sevtag ${a.severity}`}>{a.severity}</span></td>
-                          <td>
-                            <span className="cf">
-                              <span className="cf-rail">
-                                <span className="cf-fill" style={{ width: `${a.confidence * 100}%`, background: confHue(a.confidence) }} />
-                              </span>
-                              <span className="cf-n">{(a.confidence * 100).toFixed(1)}%</span>
-                            </span>
-                          </td>
-                          <td>
-                            {Object.keys(a.evidence).slice(0, 2).map(k => (
-                              <span className="ftag" key={k}>{k}</span>
-                            ))}
-                            {Object.keys(a.evidence).length > 2 && (
-                              <span className="ftag">+{Object.keys(a.evidence).length - 2}</span>
-                            )}
-                          </td>
-                          <td className="td-time">{a.flow_id}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="blank">
-                  <div className="blank-t">
-                    {scope === 'crit' ? 'No critical incidents in buffer' : 'No incidents detected'}
+          {/* ── Detection Engines tab ── */}
+          {tab === 2 && (
+            <>
+              <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+                <Panel name="Detection modules" foot="6 models in production · read-only, metadata-only inference">
+                  {MODULES.map(m => {
+                    const hits = stats?.by_threat_class?.[m.k] ?? 0
+                    return (
+                      <div className="mod" key={m.n}>
+                        <span className={`dot ${m.on ? 'ok' : 'warn'}`} />
+                        <div className="mod-b">
+                          <div className="mod-n">{m.n}</div>
+                          <div className="mod-a">{m.a}</div>
+                        </div>
+                        <span className={`mod-state ${m.on ? 'on' : 'sb'}`}>{m.on ? 'ACTIVE' : 'STANDBY'}</span>
+                        <span className="mod-hits" style={{ color: m.on ? K.fg : K.mute }}>
+                          {m.on ? hits : '—'}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </Panel>
+                <Panel name="Engine coverage vs activity" foot="coverage = deployed · activity = observed hits">
+                  <div style={{ height: 260, padding: 6 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart data={radar} outerRadius="72%">
+                        <PolarGrid stroke={K.line} />
+                        <PolarAngleAxis dataKey="k" tick={{ fontSize: 9, fill: K.mute, fontFamily: 'Inter' }} />
+                        <Radar name="Coverage" dataKey="cov" stroke={K.info} fill={K.info} fillOpacity={0.14} strokeWidth={1.2} />
+                        <Radar name="Activity" dataKey="act" stroke={K.crit} fill={K.crit} fillOpacity={0.22} strokeWidth={1.2} />
+                        <Tooltip content={<Tip />} />
+                      </RadarChart>
+                    </ResponsiveContainer>
                   </div>
-                  <div className="blank-s">enclave observing · alerts appear within one window</div>
-                </div>
-              )}
-            </Panel>
-          </div>
+                </Panel>
+              </div>
+              <div className="grid g-kpi">
+                {MODULES.map(m => (
+                  <Kpi key={m.k} name={m.n} value={m.on ? compact(stats?.by_threat_class?.[m.k] ?? 0) : '—'}
+                    tone={(stats?.by_threat_class?.[m.k] ?? 0) > 0 ? 'crit' : undefined}
+                    sub={m.on ? 'alerts this session' : 'standby'} />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* ── Flow Records tab ── */}
+          {tab === 4 && (
+            <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
+              <Panel name="Flow records — captured metadata per detected flow" tools={false}
+                foot="one row per alerted flow · 5-tuple, ports, protocol inferred from evidence · export honours filters">
+                {ledgerFilters}
+                {rows.length ? (
+                  <div className="tbl-wrap all">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Time</th>
+                          <th>Flow id</th>
+                          <th>Src IP</th>
+                          <th>Src port</th>
+                          <th>Dst IP</th>
+                          <th>Dst port</th>
+                          <th>Threat class</th>
+                          <th>Confidence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map(a => (
+                          <tr key={a.alert_id} onClick={() => setSel(a)}
+                            className={sel?.alert_id === a.alert_id ? 'sel' : ''}>
+                            <td className="td-time">{hhmmss(new Date(a.timestamp * 1000))}</td>
+                            <td className="td-time">{a.flow_id}</td>
+                            <td className="td-ip">{a.src_ip}</td>
+                            <td className="td-ip">{a.src_port || '—'}</td>
+                            <td className="td-ip">{a.dst_ip}</td>
+                            <td className="td-ip">{a.dst_port || '—'}</td>
+                            <td>
+                              <span className="tclass" style={{ color: TC[a.threat_class] ?? K.fg2 }}>
+                                <span className="tclass-sq" style={{ background: TC[a.threat_class] ?? K.mute }} />
+                                {a.threat_class}
+                              </span>
+                            </td>
+                            <td className="mono" style={{ fontSize: 11, color: K.fg2 }}>{(a.confidence * 100).toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="blank">
+                    <div className="blank-t">{filtersActive ? 'No flow records match the filters' : 'No flow records yet'}</div>
+                    <div className="blank-s">records appear as flows are classified</div>
+                  </div>
+                )}
+              </Panel>
+            </div>
+          )}
+
+          {/* Incident ledger (full history · filters · CSV export) — Posture, Live Feed */}
+          {(tab === 0 || tab === 1) && IncidentLedger}
 
           <div className="mono" style={{ fontSize: 10, color: K.mute, textAlign: 'right', paddingTop: 2 }}>
             uptime {up} · window 10s · read-only ingest · no payload decryption
