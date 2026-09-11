@@ -90,7 +90,7 @@ body {
 }
 
 /* ══ Shell ══════════════════════════════════════ */
-.app { display: grid; grid-template-columns: var(--rail) 1fr; height: 100vh; overflow: hidden; }
+.app { display: block; height: 100vh; overflow: hidden; }
 
 /* Left icon rail */
 .rail {
