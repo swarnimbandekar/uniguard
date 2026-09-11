@@ -16,8 +16,9 @@ interface Props {
   now: number
 }
 
-/* Window used for the "what's happening right now" summary. */
-const RECENT_WINDOW_SEC = 600 // last 10 minutes
+/* Rolling window backing the "live" summary — kept short so the counts track
+   current activity rather than stale history. */
+const RECENT_WINDOW_SEC = 600
 
 export function SimpleView({ alerts, stats, now }: Props) {
   const [sel, setSel] = useState<Alert | null>(null)
@@ -48,7 +49,7 @@ export function SimpleView({ alerts, stats, now }: Props) {
   }, [alerts, now, fType, fSev])
 
   /* Full filtered set (all time) — used for exports so a report can cover
-     everything the monitor retains, not just the 10-minute window. */
+     everything the monitor retains, not just the live window. */
   const filteredAll = useMemo(
     () => alerts.filter(passesFilter),
     [alerts, fType, fSev]
@@ -121,25 +122,25 @@ export function SimpleView({ alerts, stats, now }: Props) {
           <p className="sb-desc">
             {level === 'attack' && worst && (
               <>
-                {recentCrit} critical {recentCrit === 1 ? 'threat' : 'threats'} in the last 10 minutes.
+                {recentCrit} critical {recentCrit === 1 ? 'threat' : 'threats'} active right now.
                 {' '}Most serious: <strong>{threatMeta(worst.threat_class).label}</strong>
                 {topSource && <> · busiest source <span className="mono">{topSource[0]}</span></>}.
               </>
             )}
             {level === 'elevated' && (
               <>
-                {recentHigh + recentMed} notable {recentHigh + recentMed === 1 ? 'event' : 'events'} in the
-                last 10 minutes. Worth a look, but nothing critical right now.
+                {recentHigh + recentMed} notable {recentHigh + recentMed === 1 ? 'event' : 'events'} happening
+                live. Worth a look, but nothing critical right now.
               </>
             )}
             {level === 'clear' && (
-              <>No active threats in the last 10 minutes. The system is watching traffic in real time.</>
+              <>No active threats right now. The system is watching traffic live, in real time.</>
             )}
           </p>
         </div>
         <div className="sb-count">
           <div className="sb-count-n">{recent.length}</div>
-          <div className="sb-count-l">events · 10 min</div>
+          <div className="sb-count-l">events · live</div>
         </div>
       </section>
 
@@ -148,18 +149,18 @@ export function SimpleView({ alerts, stats, now }: Props) {
         <div className="card">
           <div className="card-k">
             Critical now
-            <Info text="Events in the last 10 minutes that need immediate attention (highest confidence detections)." />
+            <Info text="Live events that need immediate attention (highest confidence detections)." />
           </div>
           <div className="card-v" style={{ color: 'var(--crit)' }}>{recentCrit}</div>
-          <div className="card-s">last 10 minutes</div>
+          <div className="card-s">live</div>
         </div>
         <div className="card">
           <div className="card-k">
             Needs a look
-            <Info text="High and medium events in the last 10 minutes — suspicious, but not confirmed critical." />
+            <Info text="High and medium live events — suspicious, but not confirmed critical." />
           </div>
           <div className="card-v" style={{ color: 'var(--high)' }}>{recentHigh + recentMed}</div>
-          <div className="card-s">high &amp; medium · 10 min</div>
+          <div className="card-s">high &amp; medium · live</div>
         </div>
         <div className="card">
           <div className="card-k">

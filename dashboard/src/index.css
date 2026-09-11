@@ -90,7 +90,7 @@ body {
 }
 
 /* ══ Shell ══════════════════════════════════════ */
-.app { display: block; height: 100vh; overflow: hidden; }
+.app { display: flex; height: 100vh; overflow: hidden; }
 
 /* Left icon rail */
 .rail {
@@ -119,7 +119,7 @@ body {
 .rail-spacer { flex: 1; }
 
 /* Right column of shell */
-.main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 
 /* Tab strip */
 .tabs {
