@@ -42,6 +42,35 @@
   --f-serif: 'Instrument Serif', Georgia, serif;
 
   --rail: 52px;
+  --code-bg: #080a0d;
+}
+
+/* ── Light theme ─────────────────────────────────
+   Overrides the surface + text + line neutrals only. Signal/severity hues stay
+   the same so alert colour-coding reads identically in both modes. */
+:root[data-theme="light"] {
+  --bg: #f4f6f9;
+  --panel: #ffffff;
+  --panel-hd: #f0f3f7;
+  --elev: #eef1f5;
+  --hover: #e9edf2;
+
+  --line: #dde3ea;
+  --line-2: #cbd3dd;
+
+  --fg: #1a2129;
+  --fg-2: #3f4a57;
+  --fg-3: #5a6572;
+  --fg-dim: #667283;
+  --fg-mute: #8a94a2;
+
+  --ok: #0e9e8e;
+  --info: #2b7fd4;
+  --crit: #d13438;
+  --high: #d9670a;
+  --med: #b58b00;
+  --low: #2b8a5a;
+  --code-bg: #f0f3f7;
 }
 
 html, body, #root { height: 100%; }
@@ -108,6 +137,18 @@ body {
 .tab:hover { color: var(--fg-2); }
 .tab.on { color: var(--fg); border-bottom-color: var(--ok); }
 .tabs-right { margin-left: auto; display: flex; align-items: center; gap: 12px; padding-right: 8px; }
+
+/* Theme toggle */
+.theme-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--fg-2);
+  font-family: inherit; font-size: 12px; font-weight: 500;
+  padding: 5px 10px; border-radius: var(--r-md); cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.theme-toggle:hover { background: var(--elev); color: var(--fg); border-color: var(--fg-mute); }
+.theme-toggle-lbl { font-size: 11px; }
+@media (max-width: 760px) { .theme-toggle-lbl { display: none; } }
 
 /* Toolbar */
 .toolbar {
@@ -401,7 +442,7 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* JSON */
 .json {
-  background: #080a0d; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--code-bg); border: 1px solid var(--line-2); border-radius: var(--r-md);
   font-family: var(--f-mono); font-size: 11px; overflow: hidden;
 }
 .json-hd {

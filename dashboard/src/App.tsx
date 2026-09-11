@@ -211,6 +211,9 @@ export default function App() {
   const [tab, setTab] = useState(0)
   const [scope, setScope] = useState<'all' | 'crit'>('all')
   const [synced, setSynced] = useState(new Date())
+  const [theme, setTheme] = useState<'dark' | 'light'>(
+    () => (localStorage.getItem('tl-theme') as 'dark' | 'light') || 'dark'
+  )
   /* Incident-ledger filters */
   const [fClass, setFClass] = useState<string>('')
   const [fSev, setFSev] = useState<string>('')
@@ -223,6 +226,17 @@ export default function App() {
     const id = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(id)
   }, [])
+
+  /* Apply + persist colour theme (dark default, light optional) */
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('tl-theme', theme)
+  }, [theme])
+
+  /* Chart grid/axis neutrals that need to flip with the theme (Recharts takes
+     literal colours, not CSS vars, so we branch here). Signal/severity hues stay
+     the same on both themes. */
+  const gridInk = theme === 'light' ? '#d3d9e0' : K.line
 
   /* rolling 2s pulse of alert arrivals */
   useEffect(() => {
@@ -541,6 +555,13 @@ export default function App() {
             <button key={t} className={`tab ${i === tab ? 'on' : ''}`} onClick={() => setTab(i)}>{t}</button>
           ))}
           <div className="tabs-right">
+            <button className="theme-toggle"
+              onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              aria-label="Toggle colour theme">
+              {theme === 'dark' ? '☀' : '☾'}
+              <span className="theme-toggle-lbl">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+            </button>
             <span className={`chip-live ${live ? 'up' : 'down'}`}>
               <span className={`dot ${live ? 'ok beat' : 'bad'}`} />
               {live ? 'STREAMING' : 'RECONNECTING'}
@@ -631,8 +652,8 @@ export default function App() {
                           </linearGradient>
                         ))}
                       </defs>
-                      <CartesianGrid strokeDasharray="2 4" stroke={K.line} vertical={false} />
-                      <XAxis dataKey="t" tickLine={false} axisLine={{ stroke: K.line }} minTickGap={30} />
+                      <CartesianGrid strokeDasharray="2 4" stroke={gridInk} vertical={false} />
+                      <XAxis dataKey="t" tickLine={false} axisLine={{ stroke: gridInk }} minTickGap={30} />
                       <YAxis tickLine={false} axisLine={false} allowDecimals={false} width={42} />
                       <Tooltip content={<Tip />} cursor={{ stroke: K.mute, strokeDasharray: '3 3' }} />
                       <Area type="monotone" stackId="1" dataKey="DGA" name="DGA" stroke={TC.DGA} strokeWidth={1.3} fill="url(#aDGA)" />
@@ -708,7 +729,7 @@ export default function App() {
                   {topSrc.length ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={topSrc} layout="vertical" margin={{ top: 0, right: 14, left: 4, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="2 4" stroke={K.line} horizontal={false} />
+                        <CartesianGrid strokeDasharray="2 4" stroke={gridInk} horizontal={false} />
                         <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
                         <YAxis type="category" dataKey="ip" width={96} tickLine={false} axisLine={false} />
                         <Tooltip content={<Tip />} cursor={{ fill: 'rgba(255,255,255,.03)' }} />
@@ -754,7 +775,7 @@ export default function App() {
                 {topSrc.length ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={topSrc} layout="vertical" margin={{ top: 0, right: 14, left: 4, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="2 4" stroke={K.line} horizontal={false} />
+                      <CartesianGrid strokeDasharray="2 4" stroke={gridInk} horizontal={false} />
                       <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
                       <YAxis type="category" dataKey="ip" width={96} tickLine={false} axisLine={false} />
                       <Tooltip content={<Tip />} cursor={{ fill: 'rgba(255,255,255,.03)' }} />
@@ -773,7 +794,7 @@ export default function App() {
               <div style={{ height: 196, padding: 6 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <RadarChart data={radar} outerRadius="70%">
-                    <PolarGrid stroke={K.line} />
+                    <PolarGrid stroke={gridInk} />
                     <PolarAngleAxis dataKey="k" tick={{ fontSize: 9, fill: K.mute, fontFamily: 'Inter' }} />
                     <Radar name="Coverage" dataKey="cov" stroke={K.info} fill={K.info} fillOpacity={0.14} strokeWidth={1.2} />
                     <Radar name="Activity" dataKey="act" stroke={K.crit} fill={K.crit} fillOpacity={0.22} strokeWidth={1.2} />
@@ -860,7 +881,7 @@ export default function App() {
                   <div style={{ height: 260, padding: 6 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <RadarChart data={radar} outerRadius="72%">
-                        <PolarGrid stroke={K.line} />
+                        <PolarGrid stroke={gridInk} />
                         <PolarAngleAxis dataKey="k" tick={{ fontSize: 9, fill: K.mute, fontFamily: 'Inter' }} />
                         <Radar name="Coverage" dataKey="cov" stroke={K.info} fill={K.info} fillOpacity={0.14} strokeWidth={1.2} />
                         <Radar name="Activity" dataKey="act" stroke={K.crit} fill={K.crit} fillOpacity={0.22} strokeWidth={1.2} />
