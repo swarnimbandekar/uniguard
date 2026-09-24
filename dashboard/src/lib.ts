@@ -33,7 +33,7 @@ export interface Stats {
    plain   — one-line description a non-analyst understands
    action  — what a responder should consider doing
    color   — severity-family hue used for this class
-   icon    — inline emoji marker (kept minimal, works without an icon font)
+   code    — short letter tag rendered as a coloured badge (no emoji)
 */
 export interface ThreatMeta {
   key: string
@@ -41,7 +41,7 @@ export interface ThreatMeta {
   plain: string
   action: string
   color: string
-  icon: string
+  code: string
 }
 
 export const THREATS: Record<string, ThreatMeta> = {
@@ -51,7 +51,7 @@ export const THREATS: Record<string, ThreatMeta> = {
     plain: 'A target is being buried under a flood of traffic to knock it offline.',
     action: 'Check if the targeted service is still reachable; consider rate-limiting the source.',
     color: 'var(--crit)',
-    icon: '🌊',
+    code: 'DoS',
   },
   PortScan: {
     key: 'PortScan',
@@ -59,7 +59,7 @@ export const THREATS: Record<string, ThreatMeta> = {
     plain: 'Someone is probing many ports to map out which services are open.',
     action: 'Note the scanning source; scanning often precedes a real attack.',
     color: 'var(--high)',
-    icon: '🔎',
+    code: 'SCN',
   },
   DGA: {
     key: 'DGA',
@@ -67,7 +67,7 @@ export const THREATS: Record<string, ThreatMeta> = {
     plain: 'A host is contacting randomly-generated domain names — a common malware trait.',
     action: 'Inspect the host making these lookups; it may be infected.',
     color: 'var(--med)',
-    icon: '🧬',
+    code: 'DGA',
   },
   C2_BEACONING: {
     key: 'C2_BEACONING',
@@ -75,7 +75,7 @@ export const THREATS: Record<string, ThreatMeta> = {
     plain: 'A host is "phoning home" at steady intervals, as malware does to its operator.',
     action: 'Isolate the calling host and identify the destination it keeps contacting.',
     color: 'var(--info)',
-    icon: '📡',
+    code: 'C2',
   },
   EncryptedMalware: {
     key: 'EncryptedMalware',
@@ -83,7 +83,7 @@ export const THREATS: Record<string, ThreatMeta> = {
     plain: 'Encrypted traffic on unusual ports that matches known malware behaviour.',
     action: 'Review the flow endpoints; the encryption hides the payload but the pattern is suspicious.',
     color: '#8a6d00',
-    icon: '🔐',
+    code: 'ENC',
   },
   DataExfiltration: {
     key: 'DataExfiltration',
@@ -91,7 +91,7 @@ export const THREATS: Record<string, ThreatMeta> = {
     plain: 'An unusually large upload is leaving the network — data may be being stolen.',
     action: 'Identify what is being sent and to where before more data leaves.',
     color: '#6d3fbf',
-    icon: '📤',
+    code: 'EXF',
   },
 }
 
@@ -102,7 +102,7 @@ export const THREAT_ORDER = [
 export function threatMeta(key: string): ThreatMeta {
   return THREATS[key] ?? {
     key, label: key, plain: 'Unclassified network event.',
-    action: 'Review the flow details.', color: 'var(--ink-3)', icon: '•',
+    action: 'Review the flow details.', color: 'var(--ink-3)', code: '?',
   }
 }
 

@@ -96,6 +96,7 @@
   padding: 6px 11px; border-radius: var(--r-sm); cursor: pointer; transition: background .12s;
 }
 .ghost-btn:hover { background: var(--hover); }
+.ghost-btn-cta { color: var(--gov-blue); font-weight: 700; }
 
 .mode-switch {
   display: inline-flex; border: 1px solid var(--gov-blue); border-radius: var(--r-full);

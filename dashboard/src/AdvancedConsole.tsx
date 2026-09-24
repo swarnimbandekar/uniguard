@@ -3,6 +3,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, BarChart, Bar, RadarChart, PolarGrid, PolarAngleAxis, Radar,
 } from 'recharts'
+import { exportPdf } from './report'
 
 /* ── Types ─────────────────────────────────────── */
 interface Alert {
@@ -432,6 +433,22 @@ export default function AdvancedConsole() {
     URL.revokeObjectURL(url)
   }, [rows])
 
+  /* Export the currently-filtered ledger rows to a print-styled PDF report,
+     reusing the shared report generator so Simple and Advanced stay in sync. */
+  const exportPdfReport = useCallback(() => {
+    const parts = [
+      scope === 'crit' ? 'Critical only' : '',
+      fClass ? `Class: ${fClass}` : '',
+      fSev ? `Severity: ${fSev}` : '',
+      fQuery.trim() ? `Search: ${fQuery.trim()}` : '',
+    ].filter(Boolean)
+    exportPdf({
+      alerts: rows,
+      stats,
+      filterSummary: parts.length ? parts.join(' · ') : 'All incidents',
+    })
+  }, [rows, stats, scope, fClass, fSev, fQuery])
+
   /* ── Incident ledger (filters + CSV export + full history) ── */
   const ledgerFilters = (
     <div className="ledger-filters">
@@ -454,6 +471,8 @@ export default function AdvancedConsole() {
       )}
       <button className="tool-btn export" onClick={exportCsv} disabled={!rows.length}
         title="Export the filtered rows to CSV">⭳ Export CSV</button>
+      <button className="tool-btn export" onClick={exportPdfReport} disabled={!rows.length}
+        title="Export the filtered rows to a PDF report">⭳ Export PDF</button>
     </div>
   )
 
@@ -570,6 +589,7 @@ export default function AdvancedConsole() {
             <span className="mono">Synced {hhmmss(synced)}</span>
             <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
             <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
+            <button className="ptool" title="Export filtered incidents to PDF" onClick={exportPdfReport} disabled={!rows.length}>⎙</button>
             <button className="ptool" title="Layout">⚙</button>
           </span>
         </div>

@@ -43,7 +43,7 @@ export function Header({
             className={`a11y-btn contrast ${contrast === 'high' ? 'on' : ''}`}
             onClick={() => onContrast(contrast === 'high' ? 'normal' : 'high')}
             aria-pressed={contrast === 'high'}>
-            ◑ High contrast
+            High contrast
           </button>
         </div>
 
@@ -78,7 +78,8 @@ export function Header({
             {live ? 'Live monitoring' : 'Reconnecting…'}
           </span>
           <button className="ghost-btn" onClick={onRefresh} title="Refresh now">
-            <span className="mono" style={{ fontSize: '.72rem' }}>Updated {timeStr}</span> ↻
+            <span className="mono" style={{ fontSize: '.72rem' }}>Updated {timeStr}</span>
+            <span className="ghost-btn-cta">Refresh</span>
           </button>
 
           <div className="mode-switch" role="group" aria-label="View mode">

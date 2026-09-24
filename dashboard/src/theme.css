@@ -82,16 +82,58 @@
 :root[data-fontscale="lg"] { --fs-root: 18px; }
 :root[data-fontscale="xl"] { --fs-root: 20px; }
 
-/* ── Accessibility: high-contrast (WCAG) ── */
+/* ── Accessibility: high-contrast (WCAG) ──
+   Darkens every ink level, strengthens all lines, flattens the raised/inset
+   surfaces to pure white and gives hover a clearly visible tint. Covers the
+   full token set so the whole page shifts, not just headline text. */
 :root[data-contrast="high"] {
-  --ink:      #000000;
-  --ink-2:    #16233a;
-  --ink-3:    #263248;
-  --line:     #7c8aa0;
-  --line-2:   #5a6b84;
-  --surface:  #ffffff;
-  --bg:       #ffffff;
-  --gov-blue: #002b7f;
+  --ink:        #000000;
+  --ink-2:      #101d31;
+  --ink-3:      #1c2a40;
+  --ink-mute:   #33415a;
+
+  --surface:    #ffffff;
+  --surface-2:  #ffffff;
+  --surface-3:  #ffffff;
+  --bg:         #ffffff;
+  --hover:      #dde8fb;
+
+  --line:       #4a5a72;
+  --line-2:     #2e3d54;
+
+  --gov-blue:   #002b7f;
+  --gov-blue-lt:#0b3d91;
+  --gov-blue-wash: #d7e3fb;
+
+  /* Deepen severity hues so chips/labels keep AA contrast on white */
+  --crit:       #b11116;
+  --high:       #a83e00;
+  --med:        #7a5600;
+  --low:        #14611a;
+  --ok:         #14611a;
+  --info:       #002b7f;
+
+  --crit-wash:  #fbe0e0;
+  --high-wash:  #fbe8d8;
+  --med-wash:   #f7eecb;
+  --low-wash:   #dcefdd;
+  --ok-wash:    #dcefdd;
+}
+
+/* High contrast should force the light palette even in the Advanced console. */
+:root[data-contrast="high"] .app {
+  --bg:      #ffffff;
+  --panel:   #ffffff;
+  --panel-hd:#ffffff;
+  --elev:    #eef2f8;
+  --hover:   #dde8fb;
+  --line:    #4a5a72;
+  --line-2:  #2e3d54;
+  --fg:      #000000;
+  --fg-2:    #101d31;
+  --fg-3:    #1c2a40;
+  --fg-dim:  #263248;
+  --fg-mute: #33415a;
 }
 
 /* ── Dark set (Advanced war-room only) ── */

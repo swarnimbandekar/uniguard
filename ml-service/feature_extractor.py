@@ -274,10 +274,11 @@ class FeatureExtractor:
                 if flow.bwd_packets == 0:  # never established
                     continue
                 a = em_agg.setdefault((flow.src_ip, flow.dst_ip, flow.dst_port), {
-                    "sessions": 0, "bytes": 0, "psh": 0, "pkts": 0,
+                    "sessions": 0, "bytes": 0, "fwd_bytes": 0, "psh": 0, "pkts": 0,
                 })
                 a["sessions"] += 1
                 a["bytes"] += flow.fwd_bytes + flow.bwd_bytes
+                a["fwd_bytes"] += flow.fwd_bytes
                 a["psh"] += flow.psh_count
                 a["pkts"] += flow.fwd_packets + flow.bwd_packets
 
@@ -285,12 +286,17 @@ class FeatureExtractor:
                 if a["sessions"] < 3:
                     continue
                 bytes_per_conn = a["bytes"] / a["sessions"]
+                fwd_bytes_per_conn = a["fwd_bytes"] / a["sessions"]
                 psh_per_conn = a["psh"] / a["sessions"]
                 # Encrypted-malware session signature: each session carries a real
-                # data exchange (multiple PSH data packets, substantial payload).
-                # The threshold sits well above a C2 check-in (~1-2 pkts / tens of
-                # bytes) so genuine tiny beacons are left for the C2 detector.
-                if bytes_per_conn >= 700 and psh_per_conn >= 3:
+                # data exchange — a substantial OUTBOUND (client->server) payload
+                # of several hundred ciphertext bytes across multiple PSH data
+                # packets. Gating on OUTBOUND bytes (not total) is what separates
+                # this from a C2 beacon: a beacon's outbound check-in is tiny
+                # (~tens of bytes) even if the server echoes a large banner back,
+                # so a beacon can never satisfy fwd_bytes_per_conn >= 500. Tiny
+                # beacons are therefore left entirely to the C2 detector.
+                if fwd_bytes_per_conn >= 500 and bytes_per_conn >= 700 and psh_per_conn >= 3:
                     score = 0.90
                     severity = self.encrypted_malware_detector.severity(score)
                     alert = self._create_alert(
@@ -304,6 +310,7 @@ class FeatureExtractor:
                         evidence={
                             "session_count": a["sessions"],
                             "bytes_per_session": round(bytes_per_conn, 1),
+                            "fwd_bytes_per_session": round(fwd_bytes_per_conn, 1),
                             "psh_per_session": round(psh_per_conn, 1),
                             "total_bytes": a["bytes"],
                             "dst_port": dport,
@@ -604,44 +611,58 @@ class FeatureExtractor:
                 src_ip, dst_ip, dst_port = ek
 
                 # --- Cross-detector suppression -------------------------------
+                # A flood/scan destination or a flagged scanner source is never a
+                # beacon. This guard is correct and cheap, so it stays a hard gate.
                 if dst_ip in claimed_dsts or src_ip in claimed_srcs:
                     continue
 
                 # --- Well-known service port guard ----------------------------
+                # Covert C2 does not phone home over web/mail/SSH/etc.
                 if dst_port in C2_SKIP_PORTS:
                     continue
 
+                # --- Window flow summary (may be absent for a slow beacon) ----
+                # A real beacon checks in every 30s-few minutes, but self.flows is
+                # reset every WINDOW_SECONDS (10s). So on most windows a slow
+                # beacon has NO flow summary here — that is EXPECTED and must not
+                # cause us to throw the connection timestamp away. Previously
+                # `if e is None: continue` silently dropped every check-in that
+                # didn't land a complete, data-carrying flow inside the same 10s
+                # window, so a slow beacon's timestamps never accumulated and it
+                # could never reach the beacon-count threshold. We now ALWAYS
+                # record the timestamp; the quality guards below only apply when
+                # we actually have this window's flow data, and an obvious
+                # flood/scan burst is still rejected.
                 e = endpoint.get(ek)
-                # --- Established / byte-carrying guard ------------------------
-                # The endpoint must have ESTABLISHED, data-carrying connections
-                # (a real beacon completes the handshake and exchanges a small
-                # payload). A SYN flood/scan, or repeated connects to a CLOSED
-                # port (SYN -> RST, no data), must NOT be scored as beaconing —
-                # otherwise regular failed connects masquerade as a beacon.
-                if e is None or e["estab"] == 0 or e["data_bytes"] < MIN_BYTES_PER_CONN:
-                    continue
-                # Require MOST connection attempts to have established. A port
-                # that mostly RSTs is closed, not a beacon destination.
-                if e["estab"] < 0.5 * e["flows"]:
-                    continue
 
-                # --- Per-connection payload guard -----------------------------
-                avg_bytes = e["bytes"] / max(e["flows"], 1)
-                if avg_bytes < MIN_BYTES_PER_CONN:
-                    continue
+                if e is not None:
+                    # --- Flood/scan burst guard (only when we have flow data) --
+                    # A beacon is low-and-slow: each check-in is a light session.
+                    # A burst of many packets on a single connection is a
+                    # flood/scan, not a beacon — skip recording it.
+                    if e["flows"] and (e["pkts"] / e["flows"]) > 60:
+                        continue
+                    # A destination that only ever RSTs (closed port, SYN->RST,
+                    # no data at all across every observed flow) is not a beacon
+                    # target. Only reject when we have flow data AND none of it
+                    # established — otherwise we keep the timestamp.
+                    if e["flows"] > 0 and e["estab"] == 0 and e["data_bytes"] == 0:
+                        continue
+                    per_conn_bytes = e["bytes"] / max(len(times), 1)
+                else:
+                    # No flow summary this window (slow beacon between windows):
+                    # attribute a nominal small payload; the detector's
+                    # MIN_TOTAL_BYTES guard still requires real accumulated bytes
+                    # over the beacon's lifetime before it fires.
+                    per_conn_bytes = MIN_BYTES_PER_CONN
 
-                # --- Flood-rate guard -----------------------------------------
-                # A beacon is low-and-slow: each check-in is a light session.
-                # Reject if any single connection carried a burst of packets.
-                if e["flows"] and (e["pkts"] / e["flows"]) > 60:
-                    continue
-
-                # Per-connection byte share for the tracker's volume evidence.
-                per_conn_bytes = e["bytes"] / max(len(times), 1)
                 logger.info(
-                    f"C2 DEBUG cand: {src_ip}->{dst_ip}:{dst_port} "
-                    f"conn_events={len(times)} resp_pkts={e['resp']} "
-                    f"bytes={e['bytes']} claimed={dst_ip in claimed_dsts or src_ip in claimed_srcs}"
+                    "C2 DEBUG cand: %s->%s:%s conn_events=%d flow_data=%s "
+                    "estab=%s data_bytes=%s",
+                    src_ip, dst_ip, dst_port, len(times),
+                    e is not None,
+                    (e["estab"] if e else "-"),
+                    (e["data_bytes"] if e else "-"),
                 )
                 for ts in times:
                     self.c2_beacon_detector.observe(

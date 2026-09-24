@@ -57,7 +57,7 @@ export default function App() {
         <div className="container">
           <nav className="crumb" aria-label="Breadcrumb">
             <a href="#main">Home</a>
-            <span className="sep" aria-hidden="true">›</span>
+            <span className="sep" aria-hidden="true">&rsaquo;</span>
             <span className="here">Network Threat Monitor</span>
           </nav>
 

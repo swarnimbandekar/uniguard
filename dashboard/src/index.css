@@ -2,7 +2,11 @@
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-:root {
+/* Advanced-console tokens are scoped to the `.app` subtree so they never leak
+   into the Simple view (which lives outside `.app` and uses theme.css tokens).
+   Keeping these off `:root` is what stops the dark console palette overriding
+   the light Simple palette — the source of the black hover / broken contrast. */
+.app {
   /* Surfaces — near-black console */
   --bg: #0a0c0f;
   --panel: #11141a;
@@ -17,7 +21,7 @@
   /* Text */
   --fg: #e3e7ec;
   --fg-2: #99a3b0;
-  --fg-3: #6b7embed;
+  --fg-3: #6b7683;
   --fg-dim: #6b7684;
   --fg-mute: #4d5663;
 
@@ -45,10 +49,10 @@
   --code-bg: #080a0d;
 }
 
-/* ── Light theme ─────────────────────────────────
+/* ── Light theme (Advanced console) ──────────────
    Overrides the surface + text + line neutrals only. Signal/severity hues stay
    the same so alert colour-coding reads identically in both modes. */
-:root[data-theme="light"] {
+:root[data-theme="light"] .app {
   --bg: #f4f6f9;
   --panel: #ffffff;
   --panel-hd: #f0f3f7;
@@ -73,8 +77,9 @@
   --code-bg: #f0f3f7;
 }
 
-html, body, #root { height: 100%; }
-body {
+/* Advanced console owns its own background + type inside `.app`; the global
+   body styling lives in theme.css so the Simple view stays light. */
+.app {
   font-family: var(--f-sans);
   background: var(--bg);
   color: var(--fg);
@@ -83,7 +88,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.app .mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
 .eyebrow {
   font-size: 10px; font-weight: 600; letter-spacing: .09em;
   text-transform: uppercase; color: var(--fg-dim);

@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BeaconTracker:
     """Tracks connection timestamps for one (src, dst, dport) endpoint pair."""
-    connect_times: deque = field(default_factory=lambda: deque(maxlen=50))
+    # Cap high enough to hold a slow beacon's history across a long span
+    # (e.g. a 60s beacon over ~30 min = 30 check-ins) without truncating.
+    connect_times: deque = field(default_factory=lambda: deque(maxlen=256))
     total_bytes: int = 0
     total_conns: int = 0
     last_seen: float = 0.0
@@ -44,28 +46,40 @@ class C2BeaconDetector:
     """
 
     # Tuning parameters
-    MIN_BEACONS = 5           # need at least this many connections to assess periodicity
-    # Coefficient of variation below this = regular beacon. Real C2 frameworks add
-    # timing jitter (often 10-30%), and LIVE capture adds OS/connect latency on top.
-    # 0.45 tolerates real-world jitter while staying below bursty/random human
-    # traffic (CV > 1.0). The feature-extractor also applies cross-detector and
-    # flow-quality guards BEFORE feeding events here, so this stage sees only
-    # clean, established, low-rate connections.
-    MAX_JITTER_CV = 0.40
+    #
+    # These are tuned for REAL live C2 traffic, not just a fast scripted demo.
+    # Live beacons check in on human/operator-scale cadences — commonly 30s, 60s,
+    # a few minutes, or longer — with jitter added by the framework (often
+    # 10-30%) plus OS/connect latency on top. The previous 1-15s interval /
+    # 180s span envelope only matched a tight demo beacon and structurally
+    # rejected every realistic beacon (its intervals fell outside the window and
+    # 6 check-ins never fit in 180s). The window below covers the common range.
+    #
+    # The feature-extractor applies cross-detector suppression and an
+    # established / data-carrying / non-standard-port / rate guard BEFORE feeding
+    # events here, so this stage already sees only clean, low-rate connections —
+    # widening the periodicity envelope does not open the door to floods/scans.
+    MIN_BEACONS = 4           # need at least this many connections to assess periodicity
+    # Coefficient of variation below this = regular beacon. Raised from 0.40 to
+    # 0.50 to tolerate the jitter real frameworks inject and live connect
+    # latency, while staying well below bursty/random human traffic (CV > 1.0).
+    MAX_JITTER_CV = 0.50
     MIN_INTERVAL = 1.0        # ignore sub-second spacing (flood/scan bursts, not beacons)
-    # Cap the usable interval so a slow TRICKLE of unrelated connections (e.g. a
-    # handful of sparse sessions dribbling in over minutes) cannot be assembled
-    # into a fake beacon. A genuine demo/C2 beacon checks in on a tight cadence,
-    # so its intervals sit well under this.
-    MAX_INTERVAL = 15.0
+    # Upper bound on a usable beacon interval. Widened from 15s to 900s (15 min)
+    # so ordinary 30s / 60s / few-minute beacons are actually measured instead of
+    # being filtered out. Sparse unrelated connections are still rejected by the
+    # jitter (CV) and minimum-beacon-count checks below.
+    MAX_INTERVAL = 900.0
     MIN_MEAN_INTERVAL = 1.0   # a true beacon phones home every second+, not bursts
     MIN_TOTAL_BYTES = 200     # reject near-empty periodic noise
-    MIN_BEACONS_STRICT = 6    # require a few more events than the bare minimum
-    MAX_TOTAL_SPAN = 180.0    # all beacons must fall within this many seconds
-    PAIR_TTL = 300.0          # evict endpoint pairs idle for 5 min (was 30 min);
-    #                           short enough to stop stale sparse connections from
-    #                           accumulating, long enough not to evict a valid,
-    #                           recently-active beacon between windows.
+    MIN_BEACONS_STRICT = 5    # require a few more events than the bare minimum
+    # All beacons must fall within this span. Widened from 180s to 3600s (1 hr)
+    # so a slow 60s+ beacon can accumulate enough check-ins to be assessed. The
+    # per-pair history (BeaconTracker) and PAIR_TTL below are sized to match.
+    MAX_TOTAL_SPAN = 3600.0
+    PAIR_TTL = 1800.0         # evict endpoint pairs idle for 30 min. Long enough
+    #                           to retain a slow live beacon's history between
+    #                           check-ins, short enough to drop stale endpoints.
 
     def __init__(self):
         self.trackers: Dict[Tuple[str, str, int], BeaconTracker] = {}

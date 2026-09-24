@@ -111,7 +111,7 @@ export function SimpleView({ alerts, stats, now }: Props) {
       {/* ── Status banner ── */}
       <section className={`status-banner ${level}`} aria-live="polite">
         <div className="sb-icon" aria-hidden="true">
-          {level === 'attack' ? '⚠' : level === 'elevated' ? '◑' : '✓'}
+          {level === 'attack' ? 'ALERT' : level === 'elevated' ? 'WATCH' : 'CLEAR'}
         </div>
         <div className="sb-text">
           <h1 className="sb-title">
@@ -205,14 +205,14 @@ export function SimpleView({ alerts, stats, now }: Props) {
             </select>
           </label>
           {filtersActive && (
-            <button className="stb-clear" onClick={clearFilters}>✕ Clear filters</button>
+            <button className="stb-clear" onClick={clearFilters}>Clear filters</button>
           )}
         </div>
         <div className="stb-exports">
           <button className="stb-btn pdf" onClick={runPdf} disabled={!filteredAll.length}
-            title="Download a formatted PDF report of the filtered threats">⤓ PDF report</button>
+            title="Download a formatted PDF report of the filtered threats">PDF report</button>
           <button className="stb-btn csv" onClick={runCsv} disabled={!filteredAll.length}
-            title="Download the filtered threats as a CSV file">⤓ CSV</button>
+            title="Download the filtered threats as a CSV file">CSV</button>
         </div>
       </section>
 
@@ -263,7 +263,8 @@ export function SimpleView({ alerts, stats, now }: Props) {
               const n = recent.filter(a => a.threat_class === k).length
               return (
                 <div className="type-row" key={k}>
-                  <span className="type-icon" aria-hidden="true">{m.icon}</span>
+                  <span className="type-icon" aria-hidden="true"
+                    style={{ color: m.color, borderColor: m.color }}>{m.code}</span>
                   <div className="type-body">
                     <div className="type-name" style={{ color: m.color }}>{m.label}</div>
                     <div className="type-plain">{m.plain}</div>
@@ -295,7 +296,8 @@ export function SimpleView({ alerts, stats, now }: Props) {
                 <li key={a.alert_id}>
                   <button className="feed-row" onClick={() => setSel(a)}>
                     <span className="feed-sev" style={{ background: SEV_COLOR[a.severity] }} aria-hidden="true" />
-                    <span className="feed-icon" aria-hidden="true">{m.icon}</span>
+                    <span className="feed-icon" aria-hidden="true"
+                      style={{ color: m.color, borderColor: m.color }}>{m.code}</span>
                     <span className="feed-main">
                       <span className="feed-desc">{describeAlert(a)}</span>
                       <span className="feed-meta">
@@ -305,7 +307,7 @@ export function SimpleView({ alerts, stats, now }: Props) {
                         <span className="feed-time">{relTime(a.timestamp, now)}</span>
                       </span>
                     </span>
-                    <span className="feed-go" aria-hidden="true">›</span>
+                    <span className="feed-go" aria-hidden="true">&rsaquo;</span>
                   </button>
                 </li>
               )
@@ -337,7 +339,8 @@ function SimpleDetail({ alert, onClose, now }: { alert: Alert; onClose: () => vo
       <div className="modal" role="dialog" aria-modal="true" aria-label={m.label}
         onClick={e => e.stopPropagation()}>
         <div className="modal-head" style={{ borderColor: m.color }}>
-          <span className="modal-icon" aria-hidden="true">{m.icon}</span>
+          <span className="modal-icon" aria-hidden="true"
+            style={{ color: m.color, borderColor: m.color }}>{m.code}</span>
           <div>
             <div className="modal-title" style={{ color: m.color }}>{m.label}</div>
             <div className="modal-sub">
@@ -347,7 +350,7 @@ function SimpleDetail({ alert, onClose, now }: { alert: Alert; onClose: () => vo
               · detected {relTime(alert.timestamp, now)}
             </div>
           </div>
-          <button className="modal-x" onClick={onClose} aria-label="Close">✕</button>
+          <button className="modal-x" onClick={onClose} aria-label="Close">Close</button>
         </div>
 
         <div className="modal-body">
