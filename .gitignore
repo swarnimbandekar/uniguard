@@ -3,9 +3,8 @@ data/pcaps/*.pcap
 data/pcaps/*.pcapng
 data/*.csv
 
-# ML models (large files)
-ml-service/models/*.pkl
-ml-service/models/*.joblib
+# ML model artifacts are versioned with the project so deployments have the
+# files required for inference.
 !ml-service/models/.gitkeep
 
 # Python
