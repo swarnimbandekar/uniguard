@@ -28,6 +28,11 @@ dashboard/dist/
 # SSH keys
 *.pem
 
+# Deployment artifacts
+nginx-proxy.conf
+OCI_DEPLOY_PLAN.md
+*.pdf
+
 # IDE
 .vscode/
 .idea/
