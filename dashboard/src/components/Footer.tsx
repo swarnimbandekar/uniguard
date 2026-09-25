@@ -1,5 +1,6 @@
 export function Footer({ uptime }: { uptime: string }) {
   const year = new Date().getFullYear()
+  const githubUrl = 'https://github.com/swarnimbandekar/sih/releases/latest'
   return (
     <footer className="gov-footer">
       <div className="foot-main">
@@ -26,6 +27,24 @@ export function Footer({ uptime }: { uptime: string }) {
             <li>System uptime · {uptime}</li>
             <li>Detection models · 6 active</li>
           </ul>
+        </div>
+        <div className="foot-col">
+          <div className="foot-h">Offline version</div>
+          <p style={{ marginBottom: '10px' }}>
+            Run UniGuard on your own machine without a browser. A native Windows
+            desktop app with a built-in SOC dashboard and one-click pipeline control.
+          </p>
+          <a
+            href={githubUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="foot-download"
+          >
+            ⬇ UniGuard Desktop (Windows .exe)
+          </a>
+          <div className="foot-download-sub">
+            Python · Docker Desktop required
+          </div>
         </div>
       </div>
       <div className="foot-bar">

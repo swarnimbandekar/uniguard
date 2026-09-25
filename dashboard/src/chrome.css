@@ -128,7 +128,7 @@
 .gov-footer { background: var(--gov-blue-dk); color: #c6d2e8; margin-top: 32px; }
 .foot-main {
   max-width: 1320px; margin: 0 auto; padding: 28px 24px;
-  display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 32px;
+  display: grid; grid-template-columns: 1.4fr 1fr 1fr 1.2fr; gap: 32px;
 }
 .foot-h {
   font-size: .82rem; font-weight: 700; color: #fff; margin-bottom: 10px;
@@ -147,6 +147,20 @@
 .foot-bar span:last-child { font-family: var(--f-deva); }
 @media (max-width: 820px) {
   .foot-main { grid-template-columns: 1fr; gap: 20px; }
+}
+
+/* Offline download button in footer */
+.foot-download {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--saffron); color: #0a1628;
+  font-size: .82rem; font-weight: 700;
+  padding: 8px 16px; border-radius: 4px;
+  text-decoration: none;
+  transition: opacity .15s;
+}
+.foot-download:hover { opacity: .88; }
+.foot-download-sub {
+  font-size: .74rem; color: #9fb0cc; margin-top: 6px;
 }
 
 /* Floating "back to Simple" button shown over the Advanced console */

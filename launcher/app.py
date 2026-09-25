@@ -34,7 +34,7 @@ from tkinter import ttk, messagebox, font as tkfont
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_NAME = "Threat Detection Console"
+APP_NAME = "UniGuard"
 APP_VERSION = "2.1.0"
 
 DASHBOARD_URL = "http://localhost:3000"
@@ -266,7 +266,7 @@ def compose_command():
 class ThreatConsole(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME}  v{APP_VERSION}")
+        self.title(f"UniGuard  v{APP_VERSION}  — Cyber Threat Detection Console")
         self.configure(bg=BG)
         self.geometry("1200x800")
         self.minsize(1040, 700)
@@ -336,10 +336,10 @@ class ThreatConsole(tk.Tk):
         brand.pack(side="left", padx=(20, 28))
         tk.Label(brand, text="⛨", bg=BG_ELEV, fg=ACCENT,
                  font=("Segoe UI", 18)).pack(side="left", padx=(0, 8))
-        tk.Label(brand, text="THREAT DETECTION", bg=BG_ELEV, fg=INK,
+        tk.Label(brand, text="UniGuard", bg=BG_ELEV, fg=INK,
                  font=("Segoe UI Semibold", 13)).pack(side="left")
-        tk.Label(brand, text="CONSOLE", bg=BG_ELEV, fg=ACCENT,
-                 font=("Segoe UI Semibold", 13)).pack(side="left", padx=(5, 0))
+        tk.Label(brand, text="· Cyber Threat Detection", bg=BG_ELEV, fg=INK_DIM,
+                 font=("Segoe UI", 11)).pack(side="left", padx=(6, 0))
 
         self.nav_buttons = {}
         self.nav_underlines = {}
@@ -574,7 +574,7 @@ class ThreatConsole(tk.Tk):
         self.log_text.tag_configure("ok", foreground=GREEN)
         self.log_text.tag_configure("err", foreground=RED)
         self.log_text.configure(state="disabled")
-        self._log_line(f"{APP_NAME} v{APP_VERSION}")
+        self._log_line(f"UniGuard v{APP_VERSION} — Offline Control Console")
         self._log_line(f"Project root: {ROOT}")
         self._log_line("Ready. Click Start Pipeline to launch the stack.")
 
