@@ -1,5 +1,5 @@
 # UTF-8
-# PyInstaller version resource for ThreatDetectionConsole.exe
+# PyInstaller version resource for UniGuard.exe
 VSVersionInfo(
   ffi=FixedFileInfo(
     filevers=(2, 1, 0, 0),
@@ -18,11 +18,11 @@ VSVersionInfo(
           u'040904B0',
           [
             StringStruct(u'CompanyName', u'SIH 2026 - NTRO'),
-            StringStruct(u'FileDescription', u'AI-Based Cyber Threat Detection Console'),
+            StringStruct(u'FileDescription', u'UniGuard — AI-Based Cyber Threat Detection'),
             StringStruct(u'FileVersion', u'2.1.0.0'),
-            StringStruct(u'InternalName', u'ThreatDetectionConsole'),
-            StringStruct(u'OriginalFilename', u'ThreatDetectionConsole.exe'),
-            StringStruct(u'ProductName', u'Threat Detection Console'),
+            StringStruct(u'InternalName', u'UniGuard'),
+            StringStruct(u'OriginalFilename', u'UniGuard.exe'),
+            StringStruct(u'ProductName', u'UniGuard'),
             StringStruct(u'ProductVersion', u'2.1.0.0')
           ]
         )
