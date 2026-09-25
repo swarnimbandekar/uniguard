@@ -591,3 +591,21 @@ tbody tr:last-child td { border-bottom: none; }
   transition: background .12s;
 }
 .reset-confirm:hover { background: rgba(248,113,113,.25); }
+
+.reset-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #f87171;
+  border-radius: var(--r-xs);
+  background: rgba(248,113,113,.06);
+  color: #f87171;
+  font-size: .9rem;
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 2px;
+  text-align: center;
+  outline: none;
+  transition: background .12s;
+}
+.reset-input::placeholder { color: rgba(248,113,113,.4); letter-spacing: 1px; }
+.reset-input:focus { background: rgba(248,113,113,.12); }
+.reset-confirm:disabled { opacity: .35; cursor: not-allowed; }

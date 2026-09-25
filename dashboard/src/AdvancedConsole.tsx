@@ -228,6 +228,7 @@ export default function AdvancedConsole({
   const [fSev, setFSev] = useState<string>('')
   const [fQuery, setFQuery] = useState<string>('')
   const [confirmReset, setConfirmReset] = useState(false)
+  const [resetInput, setResetInput] = useState('')
   const seen = useRef(0)
 
   useEffect(() => {
@@ -615,18 +616,36 @@ export default function AdvancedConsole({
 
         {/* ── Reset confirm dialog ── */}
         {confirmReset && (
-          <div className="reset-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+          <div className="reset-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title"
+            onClick={e => { if (e.target === e.currentTarget) { setConfirmReset(false); setResetInput('') } }}>
             <div className="reset-dialog">
               <div className="reset-icon" aria-hidden="true">⚠</div>
               <h2 id="reset-title" className="reset-title">Clear all records?</h2>
               <p className="reset-body">
-                This will remove all <strong>{alerts.length}</strong> alert{alerts.length !== 1 ? 's' : ''} from
-                the dashboard display. New alerts will still be captured from the live feed.
-                This action cannot be undone.
+                This will permanently remove all <strong>{alerts.length}</strong> alert{alerts.length !== 1 ? 's' : ''} from
+                the dashboard display. New alerts will continue to arrive from the live feed.
+                <br /><br />
+                <span style={{ color: '#f87171' }}>This action cannot be undone.</span>
               </p>
+              <p className="reset-body" style={{ marginTop: 0 }}>
+                Type <strong style={{ color: '#f87171', letterSpacing: 2 }}>RESET</strong> to confirm:
+              </p>
+              <input
+                className="reset-input"
+                type="text"
+                value={resetInput}
+                onChange={e => setResetInput(e.target.value)}
+                placeholder="type RESET"
+                autoFocus
+                spellCheck={false}
+              />
               <div className="reset-actions">
-                <button className="reset-cancel" onClick={() => setConfirmReset(false)}>Cancel</button>
-                <button className="reset-confirm" onClick={() => { onReset(); setConfirmReset(false) }}>
+                <button className="reset-cancel" onClick={() => { setConfirmReset(false); setResetInput('') }}>Cancel</button>
+                <button
+                  className="reset-confirm"
+                  disabled={resetInput !== 'RESET'}
+                  onClick={() => { onReset(); setConfirmReset(false); setResetInput('') }}
+                >
                   Clear all records
                 </button>
               </div>
