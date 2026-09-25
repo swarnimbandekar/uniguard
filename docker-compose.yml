@@ -142,7 +142,7 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: tunnel
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --url http://dashboard:80
+    command: tunnel --no-autoupdate --url http://dashboard:80
     depends_on:
       - dashboard
     networks:
