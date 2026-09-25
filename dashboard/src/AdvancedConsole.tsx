@@ -599,7 +599,7 @@ export default function AdvancedConsole({
           <button className="tool-btn">⌗ v{alerts[0]?.model_version ?? '1.0.0'}</button>
           <span className="tool-note">
             <span className="mono">Synced {hhmmss(synced)}</span>
-            <button className="ptool" title="Clear all alert records from the dashboard" onClick={() => setConfirmReset(true)} disabled={!alerts.length} style={{ color: alerts.length ? '#f87171' : undefined }}>⊗</button>
+            <button className="ptool" title="Clear all alert records from the dashboard" onClick={() => setConfirmReset(true)} disabled={!alerts.length} style={{ color: alerts.length ? '#f87171' : undefined }}>🗑</button>
             <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
             <button className="ptool" title="Export filtered incidents to PDF" onClick={exportPdfReport} disabled={!rows.length}>⎙</button>
           </span>
@@ -610,7 +610,7 @@ export default function AdvancedConsole({
           <div className="reset-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title"
             onClick={e => { if (e.target === e.currentTarget) { setConfirmReset(false); setResetInput('') } }}>
             <div className="reset-dialog">
-              <div className="reset-icon" aria-hidden="true">⚠</div>
+              <div className="reset-icon" aria-hidden="true">🗑</div>
               <h2 id="reset-title" className="reset-title">Clear all records?</h2>
               <p className="reset-body">
                 This will permanently remove all <strong>{alerts.length}</strong> alert{alerts.length !== 1 ? 's' : ''} from
