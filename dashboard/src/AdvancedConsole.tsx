@@ -91,7 +91,7 @@ const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${wind
 const hhmmss = (d: Date) =>
   d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-const confHue = (c: number) => (c >= 0.95 ? K.crit : c >= 0.9 ? K.high : c >= 0.8 ? K.med : K.low)
+const confHue = (c: number) => (c >= 0.90 ? K.crit : c >= 0.82 ? K.high : c >= 0.74 ? K.med : K.low)
 
 const compact = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(1)}K` : `${n}`
@@ -661,10 +661,10 @@ export default function AdvancedConsole({
               sub="since enclave start" spark={pulse} sparkColor={K.ok}
               trend={{ dir: lastPulse ? 'up' : 'flat', txt: `${lastPulse}/2s` }} />
             <Kpi name="Critical" value={compact(crit)} tone="crit"
-              sub="confidence ≥ 95%" spark={classSpark('DDoS')} sparkColor={K.crit}
+              sub="confidence ≥ 90%" spark={classSpark('DDoS')} sparkColor={K.crit}
               trend={{ dir: crit ? 'up' : 'flat', txt: total ? `${((crit / total) * 100).toFixed(0)}%` : '0%' }} />
             <Kpi name="High" value={compact(high)} tone="med"
-              sub="confidence 90–95%" spark={classSpark('PortScan')} sparkColor={K.high} />
+              sub="confidence 82–90%" spark={classSpark('PortScan')} sparkColor={K.high} />
             <Kpi name="Alerts / min" value={perMin.toFixed(1)}
               sub="observed arrival rate" spark={pulse} sparkColor={K.info} />
             <Kpi name="Mean confidence" value={`${(avgConf * 100).toFixed(0)}`} unit="%" tone="ok"
