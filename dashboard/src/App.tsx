@@ -38,6 +38,7 @@ export default function App() {
         live={feed.live}
         synced={feed.synced}
         onRefresh={feed.refresh}
+        onReset={feed.resetAlerts}
       />
     )
   }
@@ -60,12 +61,6 @@ export default function App() {
 
       <main id="main" className="app-main">
         <div className="container">
-          <nav className="crumb" aria-label="Breadcrumb">
-            <a href="#main">Home</a>
-            <span className="sep" aria-hidden="true">&rsaquo;</span>
-            <span className="here">UniGuard</span>
-          </nav>
-
           <SimpleView
             alerts={feed.alerts}
             stats={feed.stats}

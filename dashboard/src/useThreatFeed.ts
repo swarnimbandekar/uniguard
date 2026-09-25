@@ -71,6 +71,7 @@ export interface ThreatFeed {
   live: boolean
   synced: Date
   refresh: () => void
+  resetAlerts: () => void
 }
 
 export function useThreatFeed(): ThreatFeed {
@@ -121,6 +122,10 @@ export function useThreatFeed(): ThreatFeed {
     } catch { /* noop */ }
   }, [])
 
+  const resetAlerts = useCallback(() => {
+    setAlerts([])
+  }, [])
+
   useEffect(() => {
     connect(); refresh()
     const id = setInterval(refresh, 4000)
@@ -131,5 +136,5 @@ export function useThreatFeed(): ThreatFeed {
     }
   }, [connect, refresh])
 
-  return { alerts, stats, live, synced, refresh }
+  return { alerts, stats, live, synced, refresh, resetAlerts }
 }

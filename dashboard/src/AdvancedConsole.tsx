@@ -202,6 +202,7 @@ export default function AdvancedConsole({
   live,
   synced: syncedDate,
   onRefresh,
+  onReset,
 }: {
   onBackToSimple?: () => void
   demoState: DemoState
@@ -211,6 +212,7 @@ export default function AdvancedConsole({
   live: boolean
   synced: Date
   onRefresh: () => void
+  onReset: () => void
 }) {
   const [sel, setSel] = useState<Alert | null>(null)
   const [slots, setSlots] = useState<Slot[]>([])
@@ -225,6 +227,7 @@ export default function AdvancedConsole({
   const [fClass, setFClass] = useState<string>('')
   const [fSev, setFSev] = useState<string>('')
   const [fQuery, setFQuery] = useState<string>('')
+  const [confirmReset, setConfirmReset] = useState(false)
   const seen = useRef(0)
 
   useEffect(() => {
@@ -258,11 +261,15 @@ export default function AdvancedConsole({
     return () => clearInterval(id)
   }, [alerts.length])
 
-  /* Rebuild timeline slots from the alerts prop whenever it changes */
+  /* Rebuild timeline slots from the alerts prop whenever it changes.
+     Only include alerts within the last 15 minutes so stale historical
+     events don't appear on the chart (matches Simple view behaviour). */
   useEffect(() => {
     if (!alerts.length) return
+    const cutoff = now.getTime() / 1000 - 15 * 60
     const newSlots: Slot[] = []
     for (const a of [...alerts].reverse()) {
+      if (a.timestamp < cutoff) continue
       const t = hhmmss(new Date(a.timestamp * 1000))
       const last = newSlots[newSlots.length - 1]
       if (last && last.t === t) {
@@ -286,14 +293,24 @@ export default function AdvancedConsole({
       }
     }
     setSlots(newSlots.slice(-34))
-  }, [alerts])
+  }, [alerts, now])
 
   /* ── derived ── */
-  const total = alerts.length
+  /* Rolling 10-min window — same cutoff as Simple view — for live KPIs */
+  const LIVE_WINDOW_SEC = 600
+  const recent = useMemo(
+    () => alerts.filter(a => a.timestamp >= now.getTime() / 1000 - LIVE_WINDOW_SEC),
+    [alerts, now]
+  )
+
+  const total = alerts.length            // persistent: "since enclave start"
   const perMin = stats?.alerts_per_minute ?? 0
-  const crit = alerts.filter(a => a.severity === 'CRITICAL').length
-  const high = alerts.filter(a => a.severity === 'HIGH').length
-  const srcN = stats ? Object.keys(stats.top_sources).length : 0
+  const crit = recent.filter(a => a.severity === 'CRITICAL').length   // live window
+  const high = recent.filter(a => a.severity === 'HIGH').length        // live window
+  const srcN = useMemo(() => {           // distinct sources in the live window
+    const s = new Set(recent.map(a => a.src_ip))
+    return s.size
+  }, [recent])
   const up = stats
     ? `${Math.floor(stats.uptime_seconds / 3600)}h ${String(Math.floor((stats.uptime_seconds % 3600) / 60)).padStart(2, '0')}m`
     : '—'
@@ -319,8 +336,8 @@ export default function AdvancedConsole({
     [stats]
   )
   const avgConf = useMemo(
-    () => (alerts.length ? alerts.reduce((s, a) => s + a.confidence, 0) / alerts.length : 0),
-    [alerts]
+    () => (recent.length ? recent.reduce((s, a) => s + a.confidence, 0) / recent.length : 0),
+    [recent]
   )
   const peak = useMemo(() => slots.reduce((m, s) => Math.max(m, s.total), 0), [slots])
   const lastPulse = pulse.length ? pulse[pulse.length - 1].v : 0
@@ -576,8 +593,36 @@ export default function AdvancedConsole({
             <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
             <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
             <button className="ptool" title="Export filtered incidents to PDF" onClick={exportPdfReport} disabled={!rows.length}>⎙</button>
+            <button
+              className="ptool reset-btn"
+              title="Clear all alert records from the dashboard"
+              onClick={() => setConfirmReset(true)}
+              disabled={!alerts.length}
+              style={{ color: '#f87171', marginLeft: 6 }}
+            >⊗ Reset</button>
           </span>
         </div>
+
+        {/* ── Reset confirm dialog ── */}
+        {confirmReset && (
+          <div className="reset-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+            <div className="reset-dialog">
+              <div className="reset-icon" aria-hidden="true">⚠</div>
+              <h2 id="reset-title" className="reset-title">Clear all records?</h2>
+              <p className="reset-body">
+                This will remove all <strong>{alerts.length}</strong> alert{alerts.length !== 1 ? 's' : ''} from
+                the dashboard display. New alerts will still be captured from the live feed.
+                This action cannot be undone.
+              </p>
+              <div className="reset-actions">
+                <button className="reset-cancel" onClick={() => setConfirmReset(false)}>Cancel</button>
+                <button className="reset-confirm" onClick={() => { onReset(); setConfirmReset(false) }}>
+                  Clear all records
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Canvas ── */}
         <div className="canvas">
@@ -614,16 +659,16 @@ export default function AdvancedConsole({
               sub="since enclave start" spark={pulse} sparkColor={K.ok}
               trend={{ dir: lastPulse ? 'up' : 'flat', txt: `${lastPulse}/2s` }} />
             <Kpi name="Critical" value={compact(crit)} tone="crit"
-              sub="confidence ≥ 90%" spark={classSpark('DDoS')} sparkColor={K.crit}
-              trend={{ dir: crit ? 'up' : 'flat', txt: total ? `${((crit / total) * 100).toFixed(0)}%` : '0%' }} />
+              sub="confidence ≥ 90% · last 10 min" spark={classSpark('DDoS')} sparkColor={K.crit}
+              trend={{ dir: crit ? 'up' : 'flat', txt: recent.length ? `${((crit / recent.length) * 100).toFixed(0)}%` : '0%' }} />
             <Kpi name="High" value={compact(high)} tone="med"
-              sub="confidence 82–90%" spark={classSpark('PortScan')} sparkColor={K.high} />
+              sub="confidence 82–90% · last 10 min" spark={classSpark('PortScan')} sparkColor={K.high} />
             <Kpi name="Alerts / min" value={perMin.toFixed(1)}
               sub="observed arrival rate" spark={pulse} sparkColor={K.info} />
             <Kpi name="Mean confidence" value={`${(avgConf * 100).toFixed(0)}`} unit="%" tone="ok"
-              sub={`across ${alerts.length} buffered events`} />
+              sub={`across ${recent.length} live events`} />
             <Kpi name="Threat sources" value={compact(srcN)}
-              sub="distinct origin addresses" spark={classSpark('DGA')} sparkColor={K.med} />
+              sub="distinct origins · last 10 min" spark={classSpark('DGA')} sparkColor={K.med} />
           </div>
           )}
 
