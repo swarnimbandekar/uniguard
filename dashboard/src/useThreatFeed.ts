@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Alert, Stats } from './lib'
 
-const WS_URL = `ws://${window.location.host}/ws/alerts`
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/alerts`
 
 export interface ThreatFeed {
   alerts: Alert[]
