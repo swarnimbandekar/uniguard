@@ -439,44 +439,37 @@ def _run_demo():
         p.flush()
         demo_state["progress"] = 50
 
-        # ── Phase 4: Encrypted malware — non-standard port, long flow ──
+        # ── Phase 4: Encrypted malware — non-standard port, real duration ─
+        # duration >= 5s requires real wall-clock spread; use 3 pairs × 6s each
         # fwd_bytes_per_conn >= 500, bytes_per_conn >= 700, psh_per_conn >= 3
-        # Use completely fresh IPs not used elsewhere in the demo
         demo_state["phase"] = "Encrypted malware traffic"
-        logger.info("[DEMO] Phase 4 – Encrypted malware")
+        logger.info("[DEMO] Phase 4 – Encrypted malware (real-time spread)")
         enc_pairs = [
             ("10.20.30.40", "91.230.14.11",   4444),
             ("10.20.30.41", "185.220.101.55",  7788),
             ("10.20.30.42", "94.102.49.190",   6667),
         ]
-        base_ts = int(time.time() * 1_000_000)
         for enc_src, enc_dst, enc_port in enc_pairs:
-            # One SYN to open the session
-            syn_pkt = _make_pkt(enc_src, enc_dst,
-                                random.randint(40000, 60000), enc_port,
-                                pkt_len=60, payload_len=0, tcp_flags=syn)
-            syn_pkt["timestamp_us"] = base_ts
-            _send(p, syn_pkt)
-            # 15 forward PSH packets (~80 bytes payload each) → fwd_bytes ≈ 1200
-            sport = random.randint(40000, 60000)
-            for i in range(15):
-                offset_us = (i + 1) * 300_000   # 300ms apart → 4.5s span
-                pkt = _make_pkt(enc_src, enc_dst, sport, enc_port,
-                                pkt_len=random.randint(110, 150),
-                                payload_len=random.randint(80, 120),
-                                tcp_flags=psh)
-                pkt["timestamp_us"] = base_ts + offset_us
-                _send(p, pkt)
-            # 6 backward PSH responses (~200 bytes) → bwd_bytes ≈ 1200
-            for i in range(6):
-                offset_us = (i + 1) * 700_000
-                pkt = _make_pkt(enc_dst, enc_src, enc_port, sport,
-                                pkt_len=random.randint(230, 270),
-                                payload_len=random.randint(180, 220),
-                                tcp_flags=psh)
-                pkt["timestamp_us"] = base_ts + offset_us
-                _send(p, pkt)
+            sport = random.randint(40000, 58000)
+            # SYN to open
+            _send(p, _make_pkt(enc_src, enc_dst, sport, enc_port,
+                               pkt_len=60, payload_len=0, tcp_flags=syn))
             p.flush()
+            # 12 PSH packets spread over ~6s real time
+            for i in range(12):
+                time.sleep(0.55)
+                _send(p, _make_pkt(enc_src, enc_dst, sport, enc_port,
+                                   pkt_len=random.randint(120, 160),
+                                   payload_len=random.randint(90, 130),
+                                   tcp_flags=psh))
+                # Every 3rd packet gets a response
+                if i % 3 == 2:
+                    _send(p, _make_pkt(enc_dst, enc_src, enc_port, sport,
+                                       pkt_len=random.randint(240, 300),
+                                       payload_len=random.randint(200, 260),
+                                       tcp_flags=psh))
+                p.flush()
+            demo_state["progress"] = 50 + int((enc_pairs.index((enc_src, enc_dst, enc_port)) + 1) / len(enc_pairs) * 13)
         demo_state["progress"] = 63
 
         # ── Phase 5: C2 beaconing — SYN + data packets, 2s apart ──────
