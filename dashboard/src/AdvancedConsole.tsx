@@ -84,7 +84,7 @@ const MODULES = [
 
 const TABS = ['Threat Posture', 'Live Feed', 'Detection Engines', 'Telemetry', 'Flow Records']
 
-const WS_URL = `ws://${window.location.host}/ws/alerts`
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/alerts`
 
 /* ── Utils ─────────────────────────────────────── */
 const hhmmss = (d: Date) =>
