@@ -4,6 +4,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, RadarChart, PolarGrid, PolarAngleAxis, Radar,
 } from 'recharts'
 import { exportPdf } from './report'
+import type { DemoState } from './useDemoSimulation'
 
 /* ── Types ─────────────────────────────────────── */
 interface Alert {
@@ -82,15 +83,13 @@ const MODULES = [
   { n: 'Data Exfiltration', a: 'HistGradientBoosting · 29f · 77K flows/s', k: 'DataExfiltration', on: true },
 ]
 
-const TABS = ['Threat Posture', 'Live Feed', 'Detection Engines', 'Telemetry', 'Flow Records']
-
-const WS_URL = `ws://${window.location.host}/ws/alerts`
+const TABS = ['Threat Posture', 'Detection Engines', 'Flow Records']
 
 /* ── Utils ─────────────────────────────────────── */
 const hhmmss = (d: Date) =>
   d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-const confHue = (c: number) => (c >= 0.95 ? K.crit : c >= 0.9 ? K.high : c >= 0.8 ? K.med : K.low)
+const confHue = (c: number) => (c >= 0.90 ? K.crit : c >= 0.82 ? K.high : c >= 0.74 ? K.med : K.low)
 
 const compact = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(1)}K` : `${n}`
@@ -127,8 +126,8 @@ function Tip({ active, payload, label }: { active?: boolean; payload?: TP[]; lab
   )
 }
 
-function Panel({ name, tools = true, foot, children, style }: {
-  name: string; tools?: boolean; foot?: string
+function Panel({ name, foot, children, style }: {
+  name: string; foot?: string
   children: React.ReactNode; style?: React.CSSProperties
 }) {
   return (
@@ -136,13 +135,6 @@ function Panel({ name, tools = true, foot, children, style }: {
       <div className="panel-bar">
         <span className="panel-grip">⣿</span>
         <span className="panel-name">{name}</span>
-        {tools && (
-          <span className="panel-tools">
-            <button className="ptool" title="Expand">⤢</button>
-            <button className="ptool" title="Refresh">⟳</button>
-            <button className="ptool" title="Options">⋮</button>
-          </span>
-        )}
       </div>
       <div className="panel-body tight">{children}</div>
       {foot && <div className="panel-foot">{foot}</div>}
@@ -201,26 +193,38 @@ function Kpi({ name, value, unit, tone, sub, trend, spark, sparkColor }: {
 }
 
 /* ── Advanced console (existing expert view) ─────── */
-export default function AdvancedConsole() {
-  const [alerts, setAlerts] = useState<Alert[]>([])
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [live, setLive] = useState(false)
+export default function AdvancedConsole({
+  onBackToSimple,
+  demoState: demo,
+  onRunDemo: runDemo,
+  alerts,
+  stats,
+  live,
+  synced: syncedDate,
+  onRefresh,
+}: {
+  onBackToSimple?: () => void
+  demoState: DemoState
+  onRunDemo: () => void
+  alerts: Alert[]
+  stats: Stats | null
+  live: boolean
+  synced: Date
+  onRefresh: () => void
+}) {
   const [sel, setSel] = useState<Alert | null>(null)
   const [slots, setSlots] = useState<Slot[]>([])
   const [pulse, setPulse] = useState<{ v: number }[]>([])
   const [now, setNow] = useState(new Date())
   const [tab, setTab] = useState(0)
   const [scope, setScope] = useState<'all' | 'crit'>('all')
-  const [synced, setSynced] = useState(new Date())
+  const [synced, setSynced] = useState(syncedDate)
   const [theme, setTheme] = useState<'dark' | 'light'>(
     () => (localStorage.getItem('tl-theme') as 'dark' | 'light') || 'dark'
   )
-  /* Incident-ledger filters */
   const [fClass, setFClass] = useState<string>('')
   const [fSev, setFSev] = useState<string>('')
   const [fQuery, setFQuery] = useState<string>('')
-  const ws = useRef<WebSocket | null>(null)
-  const retry = useRef<number | null>(null)
   const seen = useRef(0)
 
   useEffect(() => {
@@ -228,7 +232,10 @@ export default function AdvancedConsole() {
     return () => clearInterval(id)
   }, [])
 
-  /* Apply + persist colour theme (dark default, light optional) */
+  // Keep synced display in sync with parent feed
+  useEffect(() => { setSynced(syncedDate) }, [syncedDate])
+
+  const pull = onRefresh
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('tl-theme', theme)
@@ -251,86 +258,41 @@ export default function AdvancedConsole() {
     return () => clearInterval(id)
   }, [alerts.length])
 
-  const connect = useCallback(() => {
-    const s = new WebSocket(WS_URL)
-    s.onopen = () => setLive(true)
-    s.onmessage = e => {
-      try {
-        const d = JSON.parse(e.data)
-        if (d.type === 'heartbeat' || d.type === 'pong') return
-        const a = d as Alert
-        setAlerts(p => (p.some(x => x.alert_id === a.alert_id) ? p : [a, ...p]).slice(0, 5000))
-        setSlots(p => {
-          const t = hhmmss(new Date())
-          const last = p[p.length - 1]
-          if (last && last.t === t) {
-            const nx = { ...last, total: last.total + 1 }
-            if (a.threat_class === 'DDoS') nx.DDoS += 1
-            else if (a.threat_class === 'PortScan') nx.PortScan += 1
-            else if (a.threat_class === 'DGA') nx.DGA += 1
-            else if (a.threat_class === 'EncryptedMalware') nx.EncryptedMalware += 1
-            else if (a.threat_class === 'DataExfiltration') nx.DataExfiltration += 1
-            else if (a.threat_class === 'C2_BEACONING') nx.C2_BEACONING += 1
-            return [...p.slice(0, -1), nx]
-          }
-          return [...p, {
-            t, total: 1,
-            DDoS: a.threat_class === 'DDoS' ? 1 : 0,
-            PortScan: a.threat_class === 'PortScan' ? 1 : 0,
-            DGA: a.threat_class === 'DGA' ? 1 : 0,
-            EncryptedMalware: a.threat_class === 'EncryptedMalware' ? 1 : 0,
-            DataExfiltration: a.threat_class === 'DataExfiltration' ? 1 : 0,
-            C2_BEACONING: a.threat_class === 'C2_BEACONING' ? 1 : 0,
-          }].slice(-34)
-        })
-      } catch { /* noop */ }
-    }
-    s.onclose = () => { setLive(false); retry.current = window.setTimeout(connect, 3000) }
-    s.onerror = () => s.close()
-    ws.current = s
-  }, [])
-
-  const pull = useCallback(async () => {
-    try {
-      const r = await fetch('/api/stats')
-      if (r.ok) { setStats(await r.json()); setSynced(new Date()) }
-    } catch { /* noop */ }
-    /* Pull the full alert history from REST so the ledger shows ALL logs the
-       backend retains, not just the live WebSocket buffer. Merge by alert_id. */
-    try {
-      const r = await fetch('/api/alerts?page=1&page_size=500')
-      if (r.ok) {
-        const data = await r.json()
-        const hist: Alert[] = data.alerts ?? []
-        if (hist.length) {
-          setAlerts(prev => {
-            const byId = new Map<string, Alert>()
-            for (const a of hist) byId.set(a.alert_id, a)
-            for (const a of prev) if (!byId.has(a.alert_id)) byId.set(a.alert_id, a)
-            return Array.from(byId.values())
-              .sort((x, y) => y.timestamp - x.timestamp)
-              .slice(0, 5000)
-          })
-        }
-      }
-    } catch { /* noop */ }
-  }, [])
-
+  /* Rebuild timeline slots from the alerts prop whenever it changes */
   useEffect(() => {
-    connect(); pull()
-    const id = setInterval(pull, 4000)
-    return () => {
-      clearInterval(id)
-      if (retry.current) clearTimeout(retry.current)
-      ws.current?.close()
+    if (!alerts.length) return
+    const newSlots: Slot[] = []
+    for (const a of [...alerts].reverse()) {
+      const t = hhmmss(new Date(a.timestamp * 1000))
+      const last = newSlots[newSlots.length - 1]
+      if (last && last.t === t) {
+        last.total += 1
+        if (a.threat_class === 'DDoS') last.DDoS += 1
+        else if (a.threat_class === 'PortScan') last.PortScan += 1
+        else if (a.threat_class === 'DGA') last.DGA += 1
+        else if (a.threat_class === 'EncryptedMalware') last.EncryptedMalware += 1
+        else if (a.threat_class === 'DataExfiltration') last.DataExfiltration += 1
+        else if (a.threat_class === 'C2_BEACONING') last.C2_BEACONING += 1
+      } else {
+        newSlots.push({
+          t, total: 1,
+          DDoS: a.threat_class === 'DDoS' ? 1 : 0,
+          PortScan: a.threat_class === 'PortScan' ? 1 : 0,
+          DGA: a.threat_class === 'DGA' ? 1 : 0,
+          EncryptedMalware: a.threat_class === 'EncryptedMalware' ? 1 : 0,
+          DataExfiltration: a.threat_class === 'DataExfiltration' ? 1 : 0,
+          C2_BEACONING: a.threat_class === 'C2_BEACONING' ? 1 : 0,
+        })
+      }
     }
-  }, [connect, pull])
+    setSlots(newSlots.slice(-34))
+  }, [alerts])
 
   /* ── derived ── */
-  const total = stats?.total_alerts ?? 0
+  const total = alerts.length
   const perMin = stats?.alerts_per_minute ?? 0
-  const crit = stats?.by_severity?.CRITICAL ?? 0
-  const high = stats?.by_severity?.HIGH ?? 0
+  const crit = alerts.filter(a => a.severity === 'CRITICAL').length
+  const high = alerts.filter(a => a.severity === 'HIGH').length
   const srcN = stats ? Object.keys(stats.top_sources).length : 0
   const up = stats
     ? `${Math.floor(stats.uptime_seconds / 3600)}h ${String(Math.floor((stats.uptime_seconds % 3600) / 60)).padStart(2, '0')}m`
@@ -452,6 +414,10 @@ export default function AdvancedConsole() {
   /* ── Incident ledger (filters + CSV export + full history) ── */
   const ledgerFilters = (
     <div className="ledger-filters">
+      <div className="seg" style={{ flexShrink: 0 }}>
+        <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>All</button>
+        <button className={scope === 'crit' ? 'on' : ''} onClick={() => setScope('crit')}>Critical only</button>
+      </div>
       <input
         className="fld-input"
         placeholder="Search IP, port, flow id…"
@@ -544,7 +510,7 @@ export default function AdvancedConsole() {
   const IncidentLedger = (
     <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
       <Panel name={`Incident ledger — ${rows.length} record${rows.length === 1 ? '' : 's'}${filtersActive ? ' (filtered)' : ''}`}
-        tools={false}
+       
         foot="select a row to inspect flow, scores and supporting evidence · export honours active filters">
         {ledgerFilters}
         {ledgerTable}
@@ -561,6 +527,29 @@ export default function AdvancedConsole() {
             <button key={t} className={`tab ${i === tab ? 'on' : ''}`} onClick={() => setTab(i)}>{t}</button>
           ))}
           <div className="tabs-right">
+            {onBackToSimple && (
+              <button className="to-simple-inline" onClick={onBackToSimple}>
+                ‹ Simple view
+              </button>
+            )}
+            {/* ── Demo button — in tab bar for max visibility ── */}
+            {demo.running ? (
+              <span className="demo-adv-progress">
+                <span className="demo-adv-phase">{demo.phase}</span>
+                <span className="demo-adv-rail">
+                  <span className="demo-adv-fill" style={{ width: `${demo.progress}%` }} />
+                </span>
+                <span className="demo-adv-pct">{demo.progress}%</span>
+              </span>
+            ) : (
+              <button
+                className="demo-adv-btn-pill"
+                onClick={runDemo}
+                title="Inject all 6 attack types into the live pipeline"
+              >
+                ▶ Simulate Attack
+              </button>
+            )}
             <button className="theme-toggle"
               onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
               title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
@@ -578,11 +567,8 @@ export default function AdvancedConsole() {
 
         {/* ── Toolbar ── */}
         <div className="toolbar">
-          <div className="seg">
-            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>All severities</button>
-            <button className={scope === 'crit' ? 'on' : ''} onClick={() => setScope('crit')}>Critical only</button>
-          </div>
-          <button className="tool-btn">⧉ Enclave: read-only</button>
+          <button className="tool-btn">UniGuard</button>
+          <button className="tool-btn">⧉ Read-only</button>
           <button className="tool-btn">◷ Window 10s</button>
           <button className="tool-btn">⌗ v{alerts[0]?.model_version ?? '1.0.0'}</button>
           <span className="tool-note">
@@ -590,16 +576,15 @@ export default function AdvancedConsole() {
             <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
             <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
             <button className="ptool" title="Export filtered incidents to PDF" onClick={exportPdfReport} disabled={!rows.length}>⎙</button>
-            <button className="ptool" title="Layout">⚙</button>
           </span>
         </div>
 
         {/* ── Canvas ── */}
         <div className="canvas">
           {/* Pipeline health */}
-          {(tab === 0 || tab === 2) && (
+          {(tab === 0 || tab === 1) && (
           <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
-            <Panel name="Pipeline health" tools={false}>
+            <Panel name="Pipeline health">
               <div className="health">
                 {[
                   ['Ingest engine', 'READ-ONLY', 'ok'],
@@ -623,16 +608,16 @@ export default function AdvancedConsole() {
           )}
 
           {/* KPI strip */}
-          {(tab === 0 || tab === 1 || tab === 3) && (
+          {tab === 0 && (
           <div className="grid g-kpi">
             <Kpi name="Total alerts" value={compact(total)}
               sub="since enclave start" spark={pulse} sparkColor={K.ok}
               trend={{ dir: lastPulse ? 'up' : 'flat', txt: `${lastPulse}/2s` }} />
             <Kpi name="Critical" value={compact(crit)} tone="crit"
-              sub="confidence ≥ 95%" spark={classSpark('DDoS')} sparkColor={K.crit}
+              sub="confidence ≥ 90%" spark={classSpark('DDoS')} sparkColor={K.crit}
               trend={{ dir: crit ? 'up' : 'flat', txt: total ? `${((crit / total) * 100).toFixed(0)}%` : '0%' }} />
             <Kpi name="High" value={compact(high)} tone="med"
-              sub="confidence 90–95%" spark={classSpark('PortScan')} sparkColor={K.high} />
+              sub="confidence 82–90%" spark={classSpark('PortScan')} sparkColor={K.high} />
             <Kpi name="Alerts / min" value={perMin.toFixed(1)}
               sub="observed arrival rate" spark={pulse} sparkColor={K.info} />
             <Kpi name="Mean confidence" value={`${(avgConf * 100).toFixed(0)}`} unit="%" tone="ok"
@@ -643,7 +628,7 @@ export default function AdvancedConsole() {
           )}
 
           {/* Timeline + distribution + severity */}
-          {(tab === 0 || tab === 1 || tab === 3) && (
+          {tab === 0 && (
           <div className="grid g-main">
             <Panel name="Alert volume over time — by threat class"
               foot={`${slots.length} windows retained · peak ${peak} alerts/window`}>
@@ -706,11 +691,11 @@ export default function AdvancedConsole() {
               </div>
             </Panel>
 
-            <Panel name="Severity distribution" foot="bands: ≥95 crit · ≥90 high · ≥80 med">
+            <Panel name="Severity distribution" foot="bands: ≥90 critical · ≥82 high · ≥74 medium">
               <div style={{ padding: 14 }}>
                 {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map(s => {
-                  const n = stats?.by_severity?.[s] ?? 0
-                  const pct = total ? (n / total) * 100 : 0
+                  const n = alerts.filter(a => a.severity === s).length
+                  const pct = alerts.length ? (n / alerts.length) * 100 : 0
                   return (
                     <div className="meter" key={s}>
                       <div className="meter-hd">
@@ -726,52 +711,6 @@ export default function AdvancedConsole() {
               </div>
             </Panel>
           </div>
-          )}
-
-          {/* Telemetry: top sources + highest-risk */}
-          {tab === 3 && (
-            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-              <Panel name="Top source addresses" foot="ranked by alert count in buffer">
-                <div style={{ height: 220, padding: '12px 12px 0 0' }}>
-                  {topSrc.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={topSrc} layout="vertical" margin={{ top: 0, right: 14, left: 4, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="2 4" stroke={gridInk} horizontal={false} />
-                        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
-                        <YAxis type="category" dataKey="ip" width={96} tickLine={false} axisLine={false} />
-                        <Tooltip content={<Tip />} cursor={{ fill: 'rgba(255,255,255,.03)' }} />
-                        <Bar dataKey="count" name="Alerts" radius={[0, 3, 3, 0]} barSize={13}>
-                          {topSrc.map((_, i) => (
-                            <Cell key={i} fill={i === 0 ? K.crit : i === 1 ? K.high : i === 2 ? K.med : K.dim} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  ) : <div className="chart-blank">no sources observed</div>}
-                </div>
-              </Panel>
-              <Panel name="Highest-risk sources" foot="score = alert volume × mean confidence">
-                {topSrc.length ? topSrc.slice(0, 6).map((s, i) => {
-                  const hits = alerts.filter(a => a.src_ip === s.full)
-                  const mc = hits.length ? hits.reduce((x, a) => x + a.confidence, 0) / hits.length : 0
-                  const risk = Math.min(Math.round((s.count * 6) + mc * 40), 100)
-                  const hue = risk >= 80 ? K.crit : risk >= 55 ? K.high : K.med
-                  const cls = hits[0]?.threat_class
-                  return (
-                    <div className="rank" key={s.full}>
-                      <span className="rank-ord">{String(i + 1).padStart(2, '0')}</span>
-                      <div className="rank-body">
-                        <div className="rank-t">{s.full}</div>
-                        <div className="rank-s">{s.count} alerts{cls ? ` · ${cls}` : ''}</div>
-                      </div>
-                      <span className="rank-n" style={{ color: hue }}>{risk}</span>
-                    </div>
-                  )
-                }) : (
-                  <div className="blank"><div className="blank-t">No sources scored</div><div className="blank-s">awaiting alerts</div></div>
-                )}
-              </Panel>
-            </div>
           )}
 
           {/* Sources + radar + modules + rank */}
@@ -863,7 +802,7 @@ export default function AdvancedConsole() {
           )}
 
           {/* ── Detection Engines tab ── */}
-          {tab === 2 && (
+          {tab === 1 && (
             <>
               <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
                 <Panel name="Detection modules" foot="6 models in production · read-only, metadata-only inference">
@@ -909,9 +848,9 @@ export default function AdvancedConsole() {
           )}
 
           {/* ── Flow Records tab ── */}
-          {tab === 4 && (
+          {tab === 2 && (
             <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
-              <Panel name="Flow records — captured metadata per detected flow" tools={false}
+              <Panel name="Flow records — captured metadata per detected flow"
                 foot="one row per alerted flow · 5-tuple, ports, protocol inferred from evidence · export honours filters">
                 {ledgerFilters}
                 {rows.length ? (
@@ -961,11 +900,11 @@ export default function AdvancedConsole() {
             </div>
           )}
 
-          {/* Incident ledger (full history · filters · CSV export) — Posture, Live Feed */}
-          {(tab === 0 || tab === 1) && IncidentLedger}
+          {/* Incident ledger — Posture tab only */}
+          {tab === 0 && IncidentLedger}
 
           <div className="mono" style={{ fontSize: 10, color: K.mute, textAlign: 'right', paddingTop: 2 }}>
-            uptime {up} · window 10s · read-only ingest · no payload decryption
+            uptime {up} · UniGuard v1.0 · window 10s · read-only ingest · no payload decryption
           </div>
         </div>
       </div>

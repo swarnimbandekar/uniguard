@@ -103,7 +103,7 @@ export function exportPdf(ctx: ReportContext) {
 
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8" />
-<title>NTRO Threat Report ${tsName()}</title>
+<title>UniGuard Threat Report ${tsName()}</title>
 <style>
   @page { size: A4; margin: 18mm 16mm; }
   * { box-sizing: border-box; }
@@ -144,7 +144,7 @@ export function exportPdf(ctx: ReportContext) {
     <img class="emblem" src="/ntro-logo.svg" alt="NTRO logo"
       onerror="this.style.display='none'" />
     <div class="org">National Technical Research Organisation<small>राष्ट्रीय तकनीकी अनुसंधान संगठन · Government of India</small></div>
-    <div class="sys"><div class="t">Network Threat Monitor</div><div class="d">Cyber Threat Detection Report</div></div>
+    <div class="sys"><div class="t">UniGuard</div><div class="d">Cyber Threat Detection Report</div></div>
   </header>
 
   <h1>Threat Detection Report</h1>

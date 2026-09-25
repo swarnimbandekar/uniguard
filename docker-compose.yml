@@ -5,6 +5,7 @@ services:
     ports:
       - "9092:9092"
     environment:
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
@@ -120,6 +121,7 @@ services:
     environment:
       - KAFKA_BROKER=kafka:29092
       - KAFKA_TOPIC=threat-alerts
+      - KAFKA_FLOW_TOPIC=flow-records
       - HOST=0.0.0.0
       - PORT=8000
     networks:
@@ -134,6 +136,16 @@ services:
       - "3000:80"
     depends_on:
       - backend
+    networks:
+      - threatnet
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://dashboard:80
+    depends_on:
+      - dashboard
     networks:
       - threatnet
 

@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import './theme.css'
 import './chrome.css'
 import './simple.css'
-import './index.css' // advanced console styles (retained until Task 6 redesign)
+import './index.css' // advanced console styles
 
 import { useUiPrefs } from './useUiPrefs'
 import { useThreatFeed } from './useThreatFeed'
+import { useDemoSimulation } from './useDemoSimulation'
 import { fmtUptime } from './lib'
 import { Header } from './components/Header'
 import { Footer } from './components/Footer'
@@ -15,6 +16,8 @@ import AdvancedConsole from './AdvancedConsole'
 export default function App() {
   const prefs = useUiPrefs()
   const feed = useThreatFeed()
+  // Single demo instance at app root — survives view switches
+  const demo = useDemoSimulation()
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -24,16 +27,18 @@ export default function App() {
 
   const uptime = feed.stats ? fmtUptime(feed.stats.uptime_seconds) : '—'
 
-  /* Advanced mode: existing console with its own chrome, plus a floating
-     button back to Simple. Redesigned into the govt language in a later step. */
   if (prefs.mode === 'advanced') {
     return (
-      <>
-        <button className="to-simple" onClick={() => prefs.setMode('simple')}>
-          ‹ Simple view
-        </button>
-        <AdvancedConsole />
-      </>
+      <AdvancedConsole
+        onBackToSimple={() => prefs.setMode('simple')}
+        demoState={demo.state}
+        onRunDemo={demo.trigger}
+        alerts={feed.alerts}
+        stats={feed.stats}
+        live={feed.live}
+        synced={feed.synced}
+        onRefresh={feed.refresh}
+      />
     )
   }
 
@@ -58,10 +63,16 @@ export default function App() {
           <nav className="crumb" aria-label="Breadcrumb">
             <a href="#main">Home</a>
             <span className="sep" aria-hidden="true">&rsaquo;</span>
-            <span className="here">Network Threat Monitor</span>
+            <span className="here">UniGuard</span>
           </nav>
 
-          <SimpleView alerts={feed.alerts} stats={feed.stats} now={now} />
+          <SimpleView
+            alerts={feed.alerts}
+            stats={feed.stats}
+            now={now}
+            demoState={demo.state}
+            onRunDemo={demo.trigger}
+          />
         </div>
       </main>
 

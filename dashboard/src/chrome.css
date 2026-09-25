@@ -151,10 +151,6 @@
 
 /* Floating "back to Simple" button shown over the Advanced console */
 .to-simple {
-  position: fixed; top: 12px; right: 14px; z-index: 200;
-  background: var(--gov-blue); color: #fff; border: 1px solid var(--gov-blue-lt);
-  font-family: var(--f-sans); font-weight: 700; font-size: .8rem;
-  padding: 7px 14px; border-radius: var(--r-full); cursor: pointer;
-  box-shadow: var(--sh-2);
+  display: none; /* replaced by .to-simple-inline inside tabs-right */
 }
 .to-simple:hover { background: var(--gov-blue-lt); }
