@@ -9,6 +9,7 @@ import {
 } from '../lib'
 import { Info } from './Info'
 import { exportCsv, exportPdf } from '../report'
+import { useDemoSimulation } from '../useDemoSimulation'
 
 interface Props {
   alerts: Alert[]
@@ -22,8 +23,9 @@ const RECENT_WINDOW_SEC = 600
 
 export function SimpleView({ alerts, stats, now }: Props) {
   const [sel, setSel] = useState<Alert | null>(null)
-  const [fType, setFType] = useState<string>('')   // '' = all threat types
-  const [fSev, setFSev] = useState<string>('')      // '' = all severities
+  const [fType, setFType] = useState<string>('')
+  const [fSev, setFSev] = useState<string>('')
+  const { state: demo, trigger: runDemo } = useDemoSimulation()
 
   /* Threat types that have ever appeared, for the filter dropdown. */
   const typeOptions = useMemo(() => {
@@ -216,8 +218,35 @@ export function SimpleView({ alerts, stats, now }: Props) {
         </div>
       </section>
 
+      {/* ── Demo / Simulate Attack ── */}
+      <section className="demo-bar" aria-label="Attack simulation">
+        <div className="demo-bar-left">
+          <div className="demo-bar-title">Live attack simulation</div>
+          <div className="demo-bar-desc">
+            Injects synthetic DDoS, port scan, DGA, C2 beaconing and data exfiltration
+            into the detection pipeline. Alerts appear above within 15–30 seconds.
+          </div>
+          {demo.error && <div className="demo-error" role="alert">{demo.error}</div>}
+        </div>
+        <div className="demo-bar-right">
+          {demo.running ? (
+            <div className="demo-progress">
+              <div className="demo-phase">{demo.phase}</div>
+              <div className="demo-rail"><div className="demo-fill" style={{ width: `${demo.progress}%` }} /></div>
+              <div className="demo-pct">{demo.progress}%</div>
+            </div>
+          ) : (
+            <button className="demo-btn" onClick={runDemo} title="Inject all 5 attack types into the live pipeline">
+              ▶ Simulate Attack
+            </button>
+          )}
+          {!demo.running && demo.phase === 'Complete' && (
+            <div className="demo-done">✓ Simulation complete — check alerts above</div>
+          )}
+        </div>
+      </section>
+
       <div className="simple-grid">
-        {/* ── Timeline ── */}
         <section className="panel-lite">
           <div className="pl-head">
             <h2 className="pl-title">Activity over the last 15 minutes</h2>

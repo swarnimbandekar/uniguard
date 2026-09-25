@@ -246,3 +246,39 @@
   .stb-exports { justify-content: stretch; }
   .stb-btn { flex: 1; justify-content: center; }
 }
+
+/* ── Demo / Simulate Attack bar ─────────────────────────────────── */
+.demo-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 24px; flex-wrap: wrap;
+  background: var(--surface);
+  border: 1.5px solid var(--gov-blue);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+
+.demo-bar-left { flex: 1; min-width: 200px; }
+.demo-bar-title { font-weight: 700; font-size: .95rem; color: var(--gov-blue); margin-bottom: 4px; }
+.demo-bar-desc  { font-size: .82rem; color: var(--ink-3); line-height: 1.5; }
+.demo-error     { margin-top: 6px; font-size: .82rem; color: var(--crit); font-weight: 600; }
+
+.demo-bar-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+
+.demo-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--gov-blue); color: #fff;
+  border: none; border-radius: 6px;
+  padding: 10px 22px; font-size: .88rem; font-weight: 700;
+  cursor: pointer; transition: opacity .15s;
+  white-space: nowrap;
+}
+.demo-btn:hover:not(:disabled) { opacity: .88; }
+.demo-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.demo-progress { display: flex; flex-direction: column; gap: 6px; min-width: 200px; }
+.demo-phase { font-size: .78rem; font-weight: 600; color: var(--gov-blue); text-transform: uppercase; letter-spacing: .04em; }
+.demo-rail  { height: 6px; background: var(--hover); border-radius: 99px; overflow: hidden; }
+.demo-fill  { height: 100%; background: var(--gov-blue); border-radius: 99px; transition: width .4s ease; }
+.demo-pct   { font-size: .75rem; color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; }
+.demo-done  { font-size: .78rem; color: var(--low); font-weight: 600; }

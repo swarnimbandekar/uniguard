@@ -8,14 +8,16 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
+import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from threading import Thread
 from typing import List, Optional
 
-from confluent_kafka import Consumer, KafkaError
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from confluent_kafka import Consumer, KafkaError, Producer
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -316,6 +318,182 @@ async def websocket_alerts(websocket: WebSocket):
         if websocket in ws_connections:
             ws_connections.remove(websocket)
         logger.info(f"WebSocket client disconnected. Total: {len(ws_connections)}")
+
+
+# --- Demo / Attack Simulation ---
+
+demo_state = {
+    "running": False,
+    "phase": "",
+    "progress": 0,   # 0-100
+    "started_at": None,
+}
+
+
+def _demo_producer() -> Producer:
+    return Producer({
+        "bootstrap.servers": KAFKA_BROKER,
+        "acks": "1",
+        "queue.buffering.max.messages": "100000",
+    })
+
+
+def _make_pkt(src_ip, dst_ip, src_port, dst_port, protocol=6,
+              pkt_len=200, payload_len=100,
+              tcp_flags=None, dns_query=None) -> dict:
+    if tcp_flags is None:
+        tcp_flags = {"syn": False, "ack": True, "rst": False,
+                     "fin": False, "psh": True, "urg": False}
+    return {
+        "src_ip": src_ip, "dst_ip": dst_ip,
+        "src_port": src_port, "dst_port": dst_port,
+        "protocol": protocol,
+        "timestamp_us": int(time.time() * 1_000_000),
+        "packet_len": pkt_len, "payload_len": payload_len,
+        "tcp_flags": tcp_flags, "dns_query": dns_query,
+        "ingest_time": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _send(producer: Producer, pkt: dict):
+    topic = os.environ.get("KAFKA_FLOW_TOPIC", "flow-records")
+    key = f"{pkt['src_ip']}:{pkt['src_port']}-{pkt['dst_ip']}:{pkt['dst_port']}"
+    producer.produce(topic, key=key.encode(), value=json.dumps(pkt).encode())
+    producer.poll(0)
+
+
+def _run_demo():
+    """Runs the full attack simulation in a background thread."""
+    global demo_state
+    demo_state.update({"running": True, "phase": "Starting…", "progress": 0,
+                       "started_at": time.time()})
+    try:
+        p = _demo_producer()
+        syn = {"syn": True,  "ack": False, "rst": False, "fin": False, "psh": False, "urg": False}
+        ack = {"syn": False, "ack": True,  "rst": False, "fin": False, "psh": False, "urg": False}
+        psh = {"syn": False, "ack": True,  "rst": False, "fin": False, "psh": True,  "urg": False}
+
+        # ── Phase 1: DDoS SYN flood (5 000 packets) ──────────────────
+        demo_state["phase"] = "DDoS SYN flood"
+        logger.info("[DEMO] Phase 1 – DDoS SYN flood")
+        dst = "192.168.1.100"
+        for i in range(5000):
+            src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
+                  f"{random.randint(0,255)}.{random.randint(1,254)}"
+            _send(p, _make_pkt(src, dst, random.randint(1024, 65535), 80,
+                               pkt_len=60, payload_len=0, tcp_flags=syn))
+            if i % 1000 == 999:
+                p.flush()
+                demo_state["progress"] = int((i + 1) / 5000 * 25)
+        p.flush()
+        demo_state["progress"] = 25
+
+        # ── Phase 2: Port scan ────────────────────────────────────────
+        demo_state["phase"] = "Port scan reconnaissance"
+        logger.info("[DEMO] Phase 2 – Port scan")
+        scanner = "10.10.10.10"
+        target  = "192.168.1.200"
+        for i, port in enumerate(range(1, 501)):
+            _send(p, _make_pkt(scanner, target,
+                               random.randint(40000, 60000), port,
+                               pkt_len=60, payload_len=0, tcp_flags=syn))
+            if random.random() < 0.95:
+                _send(p, _make_pkt(target, scanner, port,
+                                   random.randint(40000, 60000),
+                                   pkt_len=60, payload_len=0,
+                                   tcp_flags={"syn": False, "ack": False,
+                                              "rst": True,  "fin": False,
+                                              "psh": False, "urg": False}))
+            if i % 100 == 99:
+                p.flush()
+                demo_state["progress"] = 25 + int((i + 1) / 500 * 25)
+        p.flush()
+        demo_state["progress"] = 50
+
+        # ── Phase 3: DGA / DNS tunnelling ─────────────────────────────
+        demo_state["phase"] = "DGA / DNS tunnelling"
+        logger.info("[DEMO] Phase 3 – DGA domains")
+        chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+        tlds  = [".com", ".net", ".org", ".info", ".xyz", ".top"]
+        src_dga = "192.168.1.50"
+        for i in range(120):
+            domain = "".join(random.choices(chars, k=random.randint(12, 22))) \
+                     + random.choice(tlds)
+            _send(p, _make_pkt(src_dga, "8.8.8.8",
+                               random.randint(1024, 65535), 53,
+                               protocol=17, pkt_len=80, payload_len=60,
+                               tcp_flags=None, dns_query=domain))
+            if i % 30 == 29:
+                p.flush()
+                demo_state["progress"] = 50 + int((i + 1) / 120 * 15)
+        p.flush()
+        demo_state["progress"] = 65
+
+        # ── Phase 4: C2 beaconing ─────────────────────────────────────
+        demo_state["phase"] = "C2 beaconing"
+        logger.info("[DEMO] Phase 4 – C2 beaconing")
+        c2_src = "192.168.1.55"
+        c2_dst = "91.234.56.78"
+        for i in range(20):
+            _send(p, _make_pkt(c2_src, c2_dst, 50100, 9999,
+                               pkt_len=120, payload_len=80, tcp_flags=psh))
+            _send(p, _make_pkt(c2_dst, c2_src, 9999, 50100,
+                               pkt_len=400, payload_len=350, tcp_flags=psh))
+            if i % 5 == 4:
+                p.flush()
+                demo_state["progress"] = 65 + int((i + 1) / 20 * 15)
+        p.flush()
+        demo_state["progress"] = 80
+
+        # ── Phase 5: Data exfiltration ────────────────────────────────
+        demo_state["phase"] = "Data exfiltration"
+        logger.info("[DEMO] Phase 5 – Data exfiltration")
+        exf_src = "192.168.1.60"
+        exf_dst = "185.100.200.50"
+        _send(p, _make_pkt(exf_src, exf_dst, 51000, 443,
+                           pkt_len=60, payload_len=0, tcp_flags=syn))
+        for i in range(500):
+            _send(p, _make_pkt(exf_src, exf_dst, 51000, 443,
+                               pkt_len=1460, payload_len=1400, tcp_flags=psh))
+            if i % 100 == 99:
+                p.flush()
+                demo_state["progress"] = 80 + int((i + 1) / 500 * 19)
+        for _ in range(5):
+            _send(p, _make_pkt(exf_dst, exf_src, 443, 51000,
+                               pkt_len=60, payload_len=0, tcp_flags=ack))
+        p.flush()
+        demo_state["progress"] = 100
+
+    except Exception as e:
+        logger.error(f"[DEMO] Error during simulation: {e}")
+    finally:
+        demo_state.update({"running": False, "phase": "Complete", "progress": 100})
+        logger.info("[DEMO] Simulation complete")
+
+
+@app.post("/api/demo")
+async def start_demo():
+    """Trigger a full multi-threat attack simulation into the pipeline."""
+    if demo_state["running"]:
+        raise HTTPException(status_code=409,
+                            detail="A simulation is already running. Wait for it to finish.")
+    t = Thread(target=_run_demo, daemon=True)
+    t.start()
+    return {"status": "started",
+            "message": "Attack simulation started. Alerts will appear within 15–30 seconds.",
+            "phases": ["DDoS SYN flood", "Port scan", "DGA / DNS tunnelling",
+                       "C2 beaconing", "Data exfiltration"]}
+
+
+@app.get("/api/demo/status")
+async def demo_status():
+    """Poll the current state of the running simulation."""
+    return {
+        "running":    demo_state["running"],
+        "phase":      demo_state["phase"],
+        "progress":   demo_state["progress"],
+        "started_at": demo_state["started_at"],
+    }
 
 
 if __name__ == "__main__":

@@ -121,6 +121,7 @@ services:
     environment:
       - KAFKA_BROKER=kafka:29092
       - KAFKA_TOPIC=threat-alerts
+      - KAFKA_FLOW_TOPIC=flow-records
       - HOST=0.0.0.0
       - PORT=8000
     networks:

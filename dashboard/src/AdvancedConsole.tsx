@@ -4,6 +4,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, RadarChart, PolarGrid, PolarAngleAxis, Radar,
 } from 'recharts'
 import { exportPdf } from './report'
+import { useDemoSimulation } from './useDemoSimulation'
 
 /* ── Types ─────────────────────────────────────── */
 interface Alert {
@@ -222,6 +223,7 @@ export default function AdvancedConsole() {
   const ws = useRef<WebSocket | null>(null)
   const retry = useRef<number | null>(null)
   const seen = useRef(0)
+  const { state: demo, trigger: runDemo } = useDemoSimulation()
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000)
@@ -585,6 +587,24 @@ export default function AdvancedConsole() {
           <button className="tool-btn">⧉ Enclave: read-only</button>
           <button className="tool-btn">◷ Window 10s</button>
           <button className="tool-btn">⌗ v{alerts[0]?.model_version ?? '1.0.0'}</button>
+          {/* ── Demo button ── */}
+          {demo.running ? (
+            <span className="demo-adv-progress">
+              <span className="demo-adv-phase">{demo.phase}</span>
+              <span className="demo-adv-rail">
+                <span className="demo-adv-fill" style={{ width: `${demo.progress}%` }} />
+              </span>
+              <span className="demo-adv-pct">{demo.progress}%</span>
+            </span>
+          ) : (
+            <button
+              className="tool-btn demo-adv-btn"
+              onClick={runDemo}
+              title="Inject all 5 attack types into the live pipeline"
+            >
+              ▶ Simulate Attack
+            </button>
+          )}
           <span className="tool-note">
             <span className="mono">Synced {hhmmss(synced)}</span>
             <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
