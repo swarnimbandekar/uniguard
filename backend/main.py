@@ -372,96 +372,171 @@ def _run_demo():
         syn = {"syn": True,  "ack": False, "rst": False, "fin": False, "psh": False, "urg": False}
         ack = {"syn": False, "ack": True,  "rst": False, "fin": False, "psh": False, "urg": False}
         psh = {"syn": False, "ack": True,  "rst": False, "fin": False, "psh": True,  "urg": False}
+        rst = {"syn": False, "ack": False, "rst": True,  "fin": False, "psh": False, "urg": False}
 
-        # ── Phase 1: DDoS SYN flood (5 000 packets) ──────────────────
+        # ── Phase 1: DDoS SYN flood ────────────────────────────────────
+        # Mixed sources, varied packet sizes, not all to the same port
         demo_state["phase"] = "DDoS SYN flood"
         logger.info("[DEMO] Phase 1 – DDoS SYN flood")
-        dst = "192.168.1.100"
-        for i in range(5000):
+        targets = ["192.168.1.100", "192.168.1.101", "10.0.0.5"]
+        for i in range(4000):
             src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
                   f"{random.randint(0,255)}.{random.randint(1,254)}"
-            _send(p, _make_pkt(src, dst, random.randint(1024, 65535), 80,
-                               pkt_len=60, payload_len=0, tcp_flags=syn))
+            dst = random.choice(targets)
+            port = random.choice([80, 443, 8080])
+            sz = random.randint(54, 78)
+            _send(p, _make_pkt(src, dst, random.randint(1024, 65535), port,
+                               pkt_len=sz, payload_len=0, tcp_flags=syn))
             if i % 1000 == 999:
                 p.flush()
-                demo_state["progress"] = int((i + 1) / 5000 * 25)
+                demo_state["progress"] = int((i + 1) / 4000 * 20)
         p.flush()
-        demo_state["progress"] = 25
+        demo_state["progress"] = 20
 
-        # ── Phase 2: Port scan ────────────────────────────────────────
+        # ── Phase 2: Port scan ─────────────────────────────────────────
+        # Varied scanner, partial RST responses, randomised port order
         demo_state["phase"] = "Port scan reconnaissance"
         logger.info("[DEMO] Phase 2 – Port scan")
-        scanner = "10.10.10.10"
+        scanners = ["10.10.10.10", "172.16.0.99"]
         target  = "192.168.1.200"
-        for i, port in enumerate(range(1, 501)):
+        ports = list(range(1, 501))
+        random.shuffle(ports)
+        for i, port in enumerate(ports):
+            scanner = random.choice(scanners)
             _send(p, _make_pkt(scanner, target,
                                random.randint(40000, 60000), port,
-                               pkt_len=60, payload_len=0, tcp_flags=syn))
-            if random.random() < 0.95:
+                               pkt_len=random.randint(54, 66), payload_len=0, tcp_flags=syn))
+            if random.random() < 0.92:
                 _send(p, _make_pkt(target, scanner, port,
                                    random.randint(40000, 60000),
-                                   pkt_len=60, payload_len=0,
-                                   tcp_flags={"syn": False, "ack": False,
-                                              "rst": True,  "fin": False,
-                                              "psh": False, "urg": False}))
+                                   pkt_len=54, payload_len=0, tcp_flags=rst))
             if i % 100 == 99:
                 p.flush()
-                demo_state["progress"] = 25 + int((i + 1) / 500 * 25)
+                demo_state["progress"] = 20 + int((i + 1) / 500 * 17)
         p.flush()
-        demo_state["progress"] = 50
+        demo_state["progress"] = 37
 
-        # ── Phase 3: DGA / DNS tunnelling ─────────────────────────────
+        # ── Phase 3: DGA / DNS tunnelling ──────────────────────────────
+        # Realistic entropy mix — some short, some long random domains
         demo_state["phase"] = "DGA / DNS tunnelling"
         logger.info("[DEMO] Phase 3 – DGA domains")
         chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-        tlds  = [".com", ".net", ".org", ".info", ".xyz", ".top"]
-        src_dga = "192.168.1.50"
-        for i in range(120):
-            domain = "".join(random.choices(chars, k=random.randint(12, 22))) \
-                     + random.choice(tlds)
-            _send(p, _make_pkt(src_dga, "8.8.8.8",
+        tlds  = [".com", ".net", ".org", ".info", ".xyz", ".top", ".click"]
+        dga_hosts = ["192.168.1.50", "192.168.1.51"]
+        for i in range(100):
+            src = random.choice(dga_hosts)
+            length = random.randint(10, 26)
+            domain = "".join(random.choices(chars, k=length)) + random.choice(tlds)
+            _send(p, _make_pkt(src, "8.8.8.8",
                                random.randint(1024, 65535), 53,
-                               protocol=17, pkt_len=80, payload_len=60,
+                               protocol=17,
+                               pkt_len=random.randint(72, 95),
+                               payload_len=random.randint(50, 70),
                                tcp_flags=None, dns_query=domain))
-            if i % 30 == 29:
+            if i % 25 == 24:
                 p.flush()
-                demo_state["progress"] = 50 + int((i + 1) / 120 * 15)
+                demo_state["progress"] = 37 + int((i + 1) / 100 * 13)
         p.flush()
-        demo_state["progress"] = 65
+        demo_state["progress"] = 50
 
-        # ── Phase 4: C2 beaconing ─────────────────────────────────────
+        # ── Phase 4: Encrypted malware — non-standard port, long flow ──
+        # Port 4444/7788, duration >5s, asymmetric, 6+ packets, low BW
+        # We fake packet timestamps spread over 8 seconds by sending many
+        # packets with slightly increasing timestamp_us values
+        demo_state["phase"] = "Encrypted malware traffic"
+        logger.info("[DEMO] Phase 4 – Encrypted malware")
+        enc_pairs = [
+            ("192.168.1.70", "91.230.14.11",  4444),
+            ("192.168.1.71", "185.220.101.55", 7788),
+            ("192.168.1.72", "94.102.49.190",  8888),
+        ]
+        base_ts = int(time.time() * 1_000_000)
+        for enc_src, enc_dst, enc_port in enc_pairs:
+            # Send 30 packets spread over ~8 seconds of fake time
+            for i in range(30):
+                offset_us = i * 280_000  # 280ms apart → 8.4s span
+                fwd = i % 3 != 0   # mostly outbound, some inbound
+                if fwd:
+                    pkt = _make_pkt(enc_src, enc_dst,
+                                    random.randint(40000, 60000), enc_port,
+                                    pkt_len=random.randint(100, 180),
+                                    payload_len=random.randint(60, 130),
+                                    tcp_flags=psh)
+                else:
+                    pkt = _make_pkt(enc_dst, enc_src,
+                                    enc_port, random.randint(40000, 60000),
+                                    pkt_len=random.randint(300, 450),
+                                    payload_len=random.randint(250, 400),
+                                    tcp_flags=psh)
+                pkt["timestamp_us"] = base_ts + offset_us
+                _send(p, pkt)
+            p.flush()
+        demo_state["progress"] = 63
+
+        # ── Phase 5: C2 beaconing — spaced connections over real time ──
+        # MIN_BEACONS_STRICT=5, MIN_INTERVAL=1s, MAX_INTERVAL=900s, CV<0.5
+        # Send 8 SYN connections spaced ~2s apart = 14s total span, cv≈0
         demo_state["phase"] = "C2 beaconing"
-        logger.info("[DEMO] Phase 4 – C2 beaconing")
-        c2_src = "192.168.1.55"
-        c2_dst = "91.234.56.78"
-        for i in range(20):
-            _send(p, _make_pkt(c2_src, c2_dst, 50100, 9999,
-                               pkt_len=120, payload_len=80, tcp_flags=psh))
-            _send(p, _make_pkt(c2_dst, c2_src, 9999, 50100,
-                               pkt_len=400, payload_len=350, tcp_flags=psh))
-            if i % 5 == 4:
-                p.flush()
-                demo_state["progress"] = 65 + int((i + 1) / 20 * 15)
+        logger.info("[DEMO] Phase 5 – C2 beaconing (spaced over ~16s)")
+        c2_pairs = [
+            ("192.168.1.55", "91.234.56.78",  9001),
+            ("192.168.1.56", "45.142.212.100", 4443),
+        ]
+        beacon_interval = 2.0   # 2s between beacons → well within 1–900s window
+        beacons_per_pair = 8
+        # Send beacons for both pairs interleaved
+        base_ts_c2 = int(time.time() * 1_000_000)
+        for beat in range(beacons_per_pair):
+            for c2_src, c2_dst, c2_port in c2_pairs:
+                offset_us = int(beat * beacon_interval * 1_000_000)
+                # Outbound beacon (small payload)
+                out_pkt = _make_pkt(c2_src, c2_dst,
+                                    random.randint(49000, 55000), c2_port,
+                                    pkt_len=random.randint(110, 140),
+                                    payload_len=random.randint(70, 100),
+                                    tcp_flags=psh)
+                out_pkt["timestamp_us"] = base_ts_c2 + offset_us
+                _send(p, out_pkt)
+                # Inbound response (larger)
+                in_pkt = _make_pkt(c2_dst, c2_src,
+                                   c2_port, random.randint(49000, 55000),
+                                   pkt_len=random.randint(350, 450),
+                                   payload_len=random.randint(300, 400),
+                                   tcp_flags=psh)
+                in_pkt["timestamp_us"] = base_ts_c2 + offset_us + 50_000
+                _send(p, in_pkt)
+            p.flush()
+            # Real sleep so timestamps span real wall-clock time — the
+            # feature extractor's periodicity detector uses observe() calls
+            # as they arrive, so real time gaps are what matters
+            if beat < beacons_per_pair - 1:
+                time.sleep(beacon_interval)
+            demo_state["progress"] = 63 + int((beat + 1) / beacons_per_pair * 20)
         p.flush()
-        demo_state["progress"] = 80
+        demo_state["progress"] = 83
 
-        # ── Phase 5: Data exfiltration ────────────────────────────────
+        # ── Phase 6: Data exfiltration ─────────────────────────────────
+        # Large asymmetric upload: many big outbound, few tiny ACK responses
         demo_state["phase"] = "Data exfiltration"
-        logger.info("[DEMO] Phase 5 – Data exfiltration")
-        exf_src = "192.168.1.60"
-        exf_dst = "185.100.200.50"
-        _send(p, _make_pkt(exf_src, exf_dst, 51000, 443,
-                           pkt_len=60, payload_len=0, tcp_flags=syn))
-        for i in range(500):
-            _send(p, _make_pkt(exf_src, exf_dst, 51000, 443,
-                               pkt_len=1460, payload_len=1400, tcp_flags=psh))
-            if i % 100 == 99:
-                p.flush()
-                demo_state["progress"] = 80 + int((i + 1) / 500 * 19)
-        for _ in range(5):
-            _send(p, _make_pkt(exf_dst, exf_src, 443, 51000,
-                               pkt_len=60, payload_len=0, tcp_flags=ack))
-        p.flush()
+        logger.info("[DEMO] Phase 6 – Data exfiltration")
+        exf_pairs = [
+            ("192.168.1.60", "185.100.200.50", 443),
+            ("192.168.1.61", "104.21.90.77",   8443),
+        ]
+        for exf_src, exf_dst, exf_port in exf_pairs:
+            _send(p, _make_pkt(exf_src, exf_dst, 51000, exf_port,
+                               pkt_len=60, payload_len=0, tcp_flags=syn))
+            for i in range(350):
+                _send(p, _make_pkt(exf_src, exf_dst, 51000, exf_port,
+                                   pkt_len=random.randint(1200, 1460),
+                                   payload_len=random.randint(1100, 1400),
+                                   tcp_flags=psh))
+                if i % 100 == 99:
+                    p.flush()
+            for _ in range(4):
+                _send(p, _make_pkt(exf_dst, exf_src, exf_port, 51000,
+                                   pkt_len=60, payload_len=0, tcp_flags=ack))
+            p.flush()
         demo_state["progress"] = 100
 
     except Exception as e:
@@ -481,8 +556,8 @@ async def start_demo():
     t.start()
     return {"status": "started",
             "message": "Attack simulation started. Alerts will appear within 15–30 seconds.",
-            "phases": ["DDoS SYN flood", "Port scan", "DGA / DNS tunnelling",
-                       "C2 beaconing", "Data exfiltration"]}
+            "phases": ["DDoS SYN flood", "Port scan reconnaissance", "DGA / DNS tunnelling",
+                       "Encrypted malware traffic", "C2 beaconing", "Data exfiltration"]}
 
 
 @app.get("/api/demo/status")

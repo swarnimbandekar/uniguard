@@ -27,14 +27,7 @@ export default function App() {
   /* Advanced mode: existing console with its own chrome, plus a floating
      button back to Simple. Redesigned into the govt language in a later step. */
   if (prefs.mode === 'advanced') {
-    return (
-      <>
-        <button className="to-simple" onClick={() => prefs.setMode('simple')}>
-          ‹ Simple view
-        </button>
-        <AdvancedConsole />
-      </>
-    )
+    return <AdvancedConsole onBackToSimple={() => prefs.setMode('simple')} />
   }
 
   return (

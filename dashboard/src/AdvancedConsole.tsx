@@ -202,7 +202,7 @@ function Kpi({ name, value, unit, tone, sub, trend, spark, sparkColor }: {
 }
 
 /* ── Advanced console (existing expert view) ─────── */
-export default function AdvancedConsole() {
+export default function AdvancedConsole({ onBackToSimple }: { onBackToSimple?: () => void }) {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
   const [live, setLive] = useState(false)
@@ -563,6 +563,11 @@ export default function AdvancedConsole() {
             <button key={t} className={`tab ${i === tab ? 'on' : ''}`} onClick={() => setTab(i)}>{t}</button>
           ))}
           <div className="tabs-right">
+            {onBackToSimple && (
+              <button className="to-simple-inline" onClick={onBackToSimple}>
+                ‹ Simple view
+              </button>
+            )}
             <button className="theme-toggle"
               onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
               title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}

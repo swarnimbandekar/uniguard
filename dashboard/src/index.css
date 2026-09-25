@@ -518,3 +518,15 @@ tbody tr:last-child td { border-bottom: none; }
 .demo-adv-rail  { width: 80px; height: 4px; background: rgba(59,158,255,.2); border-radius: 99px; overflow: hidden; flex-shrink: 0; }
 .demo-adv-fill  { height: 100%; background: #3b9eff; border-radius: 99px; transition: width .4s ease; }
 .demo-adv-pct   { font-variant-numeric: tabular-nums; flex-shrink: 0; }
+
+/* ── Inline Simple-view back button (inside tab bar) ─────────────── */
+.to-simple-inline {
+  display: inline-flex; align-items: center;
+  background: transparent; color: #3b9eff;
+  border: 1px solid rgba(59,158,255,.35);
+  font-family: var(--f-sans, inherit); font-size: .78rem; font-weight: 700;
+  padding: 4px 12px; border-radius: 99px; cursor: pointer;
+  transition: background .12s;
+  white-space: nowrap;
+}
+.to-simple-inline:hover { background: rgba(59,158,255,.12); }
