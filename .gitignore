@@ -25,6 +25,9 @@ dashboard/dist/
 # Docker
 *.log
 
+# SSH keys
+*.pem
+
 # IDE
 .vscode/
 .idea/
