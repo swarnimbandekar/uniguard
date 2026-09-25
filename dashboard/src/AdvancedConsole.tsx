@@ -201,7 +201,6 @@ export default function AdvancedConsole({
   stats,
   live,
   synced: syncedDate,
-  onRefresh,
   onReset,
 }: {
   onBackToSimple?: () => void
@@ -239,7 +238,6 @@ export default function AdvancedConsole({
   // Keep synced display in sync with parent feed
   useEffect(() => { setSynced(syncedDate) }, [syncedDate])
 
-  const pull = onRefresh
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('tl-theme', theme)
@@ -601,16 +599,9 @@ export default function AdvancedConsole({
           <button className="tool-btn">⌗ v{alerts[0]?.model_version ?? '1.0.0'}</button>
           <span className="tool-note">
             <span className="mono">Synced {hhmmss(synced)}</span>
-            <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
+            <button className="ptool" title="Clear all alert records from the dashboard" onClick={() => setConfirmReset(true)} disabled={!alerts.length} style={{ color: alerts.length ? '#f87171' : undefined }}>⊗</button>
             <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
             <button className="ptool" title="Export filtered incidents to PDF" onClick={exportPdfReport} disabled={!rows.length}>⎙</button>
-            <button
-              className="ptool"
-              title="Clear all alert records from the dashboard"
-              onClick={() => setConfirmReset(true)}
-              disabled={!alerts.length}
-              style={{ color: '#f87171' }}
-            >⊗</button>
           </span>
         </div>
 
