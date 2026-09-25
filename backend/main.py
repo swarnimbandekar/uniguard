@@ -490,7 +490,7 @@ def _run_demo():
         tlds   = [".com", ".net", ".org", ".info", ".xyz", ".top"]
 
         # Tier A: 20–26 char random → very high entropy → CRITICAL
-        for _ in range(50):
+        for _ in range(15):
             domain = "".join(random.choices(chars, k=random.randint(20, 26))) \
                      + random.choice(tlds)
             _send(p, _make_pkt("192.168.1.50", "8.8.8.8",
@@ -500,7 +500,7 @@ def _run_demo():
                                tcp_flags=None, dns_query=domain))
 
         # Tier B: 12–17 char mixed → medium entropy → HIGH
-        for _ in range(30):
+        for _ in range(10):
             domain = "".join(random.choices(chars, k=random.randint(12, 17))) \
                      + random.choice(tlds)
             _send(p, _make_pkt("192.168.1.51", "8.8.8.8",
@@ -510,7 +510,7 @@ def _run_demo():
                                tcp_flags=None, dns_query=domain))
 
         # Tier C: 8–11 char, alternating consonant-vowel → resembles real words → MEDIUM/LOW
-        for _ in range(20):
+        for _ in range(8):
             pattern = ""
             for j in range(random.randint(8, 11)):
                 pattern += random.choice(vowels if j % 2 else cons)

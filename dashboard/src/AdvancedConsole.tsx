@@ -126,8 +126,8 @@ function Tip({ active, payload, label }: { active?: boolean; payload?: TP[]; lab
   )
 }
 
-function Panel({ name, tools = true, foot, children, style }: {
-  name: string; tools?: boolean; foot?: string
+function Panel({ name, foot, children, style }: {
+  name: string; foot?: string
   children: React.ReactNode; style?: React.CSSProperties
 }) {
   return (
@@ -135,13 +135,6 @@ function Panel({ name, tools = true, foot, children, style }: {
       <div className="panel-bar">
         <span className="panel-grip">⣿</span>
         <span className="panel-name">{name}</span>
-        {tools && (
-          <span className="panel-tools">
-            <button className="ptool" title="Expand">⤢</button>
-            <button className="ptool" title="Refresh">⟳</button>
-            <button className="ptool" title="Options">⋮</button>
-          </span>
-        )}
       </div>
       <div className="panel-body tight">{children}</div>
       {foot && <div className="panel-foot">{foot}</div>}
@@ -296,10 +289,10 @@ export default function AdvancedConsole({
   }, [alerts])
 
   /* ── derived ── */
-  const total = stats?.total_alerts ?? 0
+  const total = alerts.length
   const perMin = stats?.alerts_per_minute ?? 0
-  const crit = stats?.by_severity?.CRITICAL ?? 0
-  const high = stats?.by_severity?.HIGH ?? 0
+  const crit = alerts.filter(a => a.severity === 'CRITICAL').length
+  const high = alerts.filter(a => a.severity === 'HIGH').length
   const srcN = stats ? Object.keys(stats.top_sources).length : 0
   const up = stats
     ? `${Math.floor(stats.uptime_seconds / 3600)}h ${String(Math.floor((stats.uptime_seconds % 3600) / 60)).padStart(2, '0')}m`
@@ -513,7 +506,7 @@ export default function AdvancedConsole({
   const IncidentLedger = (
     <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
       <Panel name={`Incident ledger — ${rows.length} record${rows.length === 1 ? '' : 's'}${filtersActive ? ' (filtered)' : ''}`}
-        tools={false}
+       
         foot="select a row to inspect flow, scores and supporting evidence · export honours active filters">
         {ledgerFilters}
         {ledgerTable}
@@ -582,7 +575,6 @@ export default function AdvancedConsole({
             <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
             <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
             <button className="ptool" title="Export filtered incidents to PDF" onClick={exportPdfReport} disabled={!rows.length}>⎙</button>
-            <button className="ptool" title="Layout">⚙</button>
           </span>
         </div>
 
@@ -591,7 +583,7 @@ export default function AdvancedConsole({
           {/* Pipeline health */}
           {(tab === 0 || tab === 2) && (
           <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
-            <Panel name="Pipeline health" tools={false}>
+            <Panel name="Pipeline health">
               <div className="health">
                 {[
                   ['Ingest engine', 'READ-ONLY', 'ok'],
@@ -698,11 +690,11 @@ export default function AdvancedConsole({
               </div>
             </Panel>
 
-            <Panel name="Severity distribution" foot="bands: ≥95 crit · ≥90 high · ≥80 med">
+            <Panel name="Severity distribution" foot="bands: ≥90 critical · ≥82 high · ≥74 medium">
               <div style={{ padding: 14 }}>
                 {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map(s => {
-                  const n = stats?.by_severity?.[s] ?? 0
-                  const pct = total ? (n / total) * 100 : 0
+                  const n = alerts.filter(a => a.severity === s).length
+                  const pct = alerts.length ? (n / alerts.length) * 100 : 0
                   return (
                     <div className="meter" key={s}>
                       <div className="meter-hd">
@@ -903,7 +895,7 @@ export default function AdvancedConsole({
           {/* ── Flow Records tab ── */}
           {tab === 4 && (
             <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
-              <Panel name="Flow records — captured metadata per detected flow" tools={false}
+              <Panel name="Flow records — captured metadata per detected flow"
                 foot="one row per alerted flow · 5-tuple, ports, protocol inferred from evidence · export honours filters">
                 {ledgerFilters}
                 {rows.length ? (
