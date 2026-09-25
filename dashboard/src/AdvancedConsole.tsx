@@ -85,8 +85,6 @@ const MODULES = [
 
 const TABS = ['Threat Posture', 'Live Feed', 'Detection Engines', 'Telemetry', 'Flow Records']
 
-const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/alerts`
-
 /* ── Utils ─────────────────────────────────────── */
 const hhmmss = (d: Date) =>
   d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -206,30 +204,34 @@ export default function AdvancedConsole({
   onBackToSimple,
   demoState: demo,
   onRunDemo: runDemo,
+  alerts,
+  stats,
+  live,
+  synced: syncedDate,
+  onRefresh,
 }: {
   onBackToSimple?: () => void
   demoState: DemoState
   onRunDemo: () => void
+  alerts: Alert[]
+  stats: Stats | null
+  live: boolean
+  synced: Date
+  onRefresh: () => void
 }) {
-  const [alerts, setAlerts] = useState<Alert[]>([])
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [live, setLive] = useState(false)
   const [sel, setSel] = useState<Alert | null>(null)
   const [slots, setSlots] = useState<Slot[]>([])
   const [pulse, setPulse] = useState<{ v: number }[]>([])
   const [now, setNow] = useState(new Date())
   const [tab, setTab] = useState(0)
   const [scope, setScope] = useState<'all' | 'crit'>('all')
-  const [synced, setSynced] = useState(new Date())
+  const [synced, setSynced] = useState(syncedDate)
   const [theme, setTheme] = useState<'dark' | 'light'>(
     () => (localStorage.getItem('tl-theme') as 'dark' | 'light') || 'dark'
   )
-  /* Incident-ledger filters */
   const [fClass, setFClass] = useState<string>('')
   const [fSev, setFSev] = useState<string>('')
   const [fQuery, setFQuery] = useState<string>('')
-  const ws = useRef<WebSocket | null>(null)
-  const retry = useRef<number | null>(null)
   const seen = useRef(0)
 
   useEffect(() => {
@@ -237,7 +239,10 @@ export default function AdvancedConsole({
     return () => clearInterval(id)
   }, [])
 
-  /* Apply + persist colour theme (dark default, light optional) */
+  // Keep synced display in sync with parent feed
+  useEffect(() => { setSynced(syncedDate) }, [syncedDate])
+
+  const pull = onRefresh
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('tl-theme', theme)
@@ -260,80 +265,35 @@ export default function AdvancedConsole({
     return () => clearInterval(id)
   }, [alerts.length])
 
-  const connect = useCallback(() => {
-    const s = new WebSocket(WS_URL)
-    s.onopen = () => setLive(true)
-    s.onmessage = e => {
-      try {
-        const d = JSON.parse(e.data)
-        if (d.type === 'heartbeat' || d.type === 'pong') return
-        const a = d as Alert
-        setAlerts(p => (p.some(x => x.alert_id === a.alert_id) ? p : [a, ...p]).slice(0, 5000))
-        setSlots(p => {
-          const t = hhmmss(new Date())
-          const last = p[p.length - 1]
-          if (last && last.t === t) {
-            const nx = { ...last, total: last.total + 1 }
-            if (a.threat_class === 'DDoS') nx.DDoS += 1
-            else if (a.threat_class === 'PortScan') nx.PortScan += 1
-            else if (a.threat_class === 'DGA') nx.DGA += 1
-            else if (a.threat_class === 'EncryptedMalware') nx.EncryptedMalware += 1
-            else if (a.threat_class === 'DataExfiltration') nx.DataExfiltration += 1
-            else if (a.threat_class === 'C2_BEACONING') nx.C2_BEACONING += 1
-            return [...p.slice(0, -1), nx]
-          }
-          return [...p, {
-            t, total: 1,
-            DDoS: a.threat_class === 'DDoS' ? 1 : 0,
-            PortScan: a.threat_class === 'PortScan' ? 1 : 0,
-            DGA: a.threat_class === 'DGA' ? 1 : 0,
-            EncryptedMalware: a.threat_class === 'EncryptedMalware' ? 1 : 0,
-            DataExfiltration: a.threat_class === 'DataExfiltration' ? 1 : 0,
-            C2_BEACONING: a.threat_class === 'C2_BEACONING' ? 1 : 0,
-          }].slice(-34)
-        })
-      } catch { /* noop */ }
-    }
-    s.onclose = () => { setLive(false); retry.current = window.setTimeout(connect, 3000) }
-    s.onerror = () => s.close()
-    ws.current = s
-  }, [])
-
-  const pull = useCallback(async () => {
-    try {
-      const r = await fetch('/api/stats')
-      if (r.ok) { setStats(await r.json()); setSynced(new Date()) }
-    } catch { /* noop */ }
-    /* Pull the full alert history from REST so the ledger shows ALL logs the
-       backend retains, not just the live WebSocket buffer. Merge by alert_id. */
-    try {
-      const r = await fetch('/api/alerts?page=1&page_size=500')
-      if (r.ok) {
-        const data = await r.json()
-        const hist: Alert[] = data.alerts ?? []
-        if (hist.length) {
-          setAlerts(prev => {
-            const byId = new Map<string, Alert>()
-            for (const a of hist) byId.set(a.alert_id, a)
-            for (const a of prev) if (!byId.has(a.alert_id)) byId.set(a.alert_id, a)
-            return Array.from(byId.values())
-              .sort((x, y) => y.timestamp - x.timestamp)
-              .slice(0, 5000)
-          })
-        }
-      }
-    } catch { /* noop */ }
-  }, [])
-
+  /* Rebuild timeline slots from the alerts prop whenever it changes */
   useEffect(() => {
-    connect(); pull()
-    const id = setInterval(pull, 4000)
-    return () => {
-      clearInterval(id)
-      if (retry.current) clearTimeout(retry.current)
-      ws.current?.close()
+    if (!alerts.length) return
+    const newSlots: Slot[] = []
+    for (const a of [...alerts].reverse()) {
+      const t = hhmmss(new Date(a.timestamp * 1000))
+      const last = newSlots[newSlots.length - 1]
+      if (last && last.t === t) {
+        last.total += 1
+        if (a.threat_class === 'DDoS') last.DDoS += 1
+        else if (a.threat_class === 'PortScan') last.PortScan += 1
+        else if (a.threat_class === 'DGA') last.DGA += 1
+        else if (a.threat_class === 'EncryptedMalware') last.EncryptedMalware += 1
+        else if (a.threat_class === 'DataExfiltration') last.DataExfiltration += 1
+        else if (a.threat_class === 'C2_BEACONING') last.C2_BEACONING += 1
+      } else {
+        newSlots.push({
+          t, total: 1,
+          DDoS: a.threat_class === 'DDoS' ? 1 : 0,
+          PortScan: a.threat_class === 'PortScan' ? 1 : 0,
+          DGA: a.threat_class === 'DGA' ? 1 : 0,
+          EncryptedMalware: a.threat_class === 'EncryptedMalware' ? 1 : 0,
+          DataExfiltration: a.threat_class === 'DataExfiltration' ? 1 : 0,
+          C2_BEACONING: a.threat_class === 'C2_BEACONING' ? 1 : 0,
+        })
+      }
     }
-  }, [connect, pull])
+    setSlots(newSlots.slice(-34))
+  }, [alerts])
 
   /* ── derived ── */
   const total = stats?.total_alerts ?? 0

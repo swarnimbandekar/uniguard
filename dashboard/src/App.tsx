@@ -33,6 +33,11 @@ export default function App() {
         onBackToSimple={() => prefs.setMode('simple')}
         demoState={demo.state}
         onRunDemo={demo.trigger}
+        alerts={feed.alerts}
+        stats={feed.stats}
+        live={feed.live}
+        synced={feed.synced}
+        onRefresh={feed.refresh}
       />
     )
   }
