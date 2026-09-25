@@ -605,12 +605,12 @@ export default function AdvancedConsole({
             <button className="ptool" title="Export filtered incidents to CSV" onClick={exportCsv} disabled={!rows.length}>⭳</button>
             <button className="ptool" title="Export filtered incidents to PDF" onClick={exportPdfReport} disabled={!rows.length}>⎙</button>
             <button
-              className="ptool reset-btn"
+              className="ptool"
               title="Clear all alert records from the dashboard"
               onClick={() => setConfirmReset(true)}
               disabled={!alerts.length}
-              style={{ color: '#f87171', marginLeft: 6 }}
-            >⊗ Reset</button>
+              style={{ color: '#f87171' }}
+            >⊗</button>
           </span>
         </div>
 
