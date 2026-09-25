@@ -9,23 +9,24 @@ import {
 } from '../lib'
 import { Info } from './Info'
 import { exportCsv, exportPdf } from '../report'
-import { useDemoSimulation } from '../useDemoSimulation'
+import type { DemoState } from '../useDemoSimulation'
 
 interface Props {
   alerts: Alert[]
   stats: Stats | null
   now: number
+  demoState: DemoState
+  onRunDemo: () => void
 }
 
 /* Rolling window backing the "live" summary — kept short so the counts track
    current activity rather than stale history. */
 const RECENT_WINDOW_SEC = 600
 
-export function SimpleView({ alerts, stats, now }: Props) {
+export function SimpleView({ alerts, stats, now, demoState: demo, onRunDemo: runDemo }: Props) {
   const [sel, setSel] = useState<Alert | null>(null)
   const [fType, setFType] = useState<string>('')
   const [fSev, setFSev] = useState<string>('')
-  const { state: demo, trigger: runDemo } = useDemoSimulation()
 
   /* Threat types that have ever appeared, for the filter dropdown. */
   const typeOptions = useMemo(() => {

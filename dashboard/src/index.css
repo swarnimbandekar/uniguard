@@ -512,21 +512,33 @@ tbody tr:last-child td { border-bottom: none; }
 
 .demo-adv-progress {
   display: flex; align-items: center; gap: 8px;
-  font-size: 11px; color: #3b9eff;
+  font-size: 11px; color: #17b8a6;
 }
 .demo-adv-phase { font-weight: 600; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
-.demo-adv-rail  { width: 80px; height: 4px; background: rgba(59,158,255,.2); border-radius: 99px; overflow: hidden; flex-shrink: 0; }
-.demo-adv-fill  { height: 100%; background: #3b9eff; border-radius: 99px; transition: width .4s ease; }
+.demo-adv-rail  { width: 80px; height: 4px; background: rgba(23,184,166,.2); border-radius: 99px; overflow: hidden; flex-shrink: 0; }
+.demo-adv-fill  { height: 100%; background: #17b8a6; border-radius: 99px; transition: width .4s ease; }
 .demo-adv-pct   { font-variant-numeric: tabular-nums; flex-shrink: 0; }
 
 /* ── Inline Simple-view back button (inside tab bar) ─────────────── */
 .to-simple-inline {
   display: inline-flex; align-items: center;
-  background: transparent; color: #3b9eff;
-  border: 1px solid rgba(59,158,255,.35);
-  font-family: var(--f-sans, inherit); font-size: .78rem; font-weight: 700;
-  padding: 4px 12px; border-radius: 99px; cursor: pointer;
-  transition: background .12s;
+  background: rgba(59,158,255,.15); color: #3b9eff;
+  border: 1.5px solid #3b9eff;
+  font-family: var(--f-sans, inherit); font-size: .8rem; font-weight: 700;
+  padding: 5px 14px; border-radius: 99px; cursor: pointer;
+  transition: background .12s, color .12s;
   white-space: nowrap;
 }
-.to-simple-inline:hover { background: rgba(59,158,255,.12); }
+.to-simple-inline:hover { background: #3b9eff; color: #fff; }
+
+/* ── Simulate Attack pill button in tab bar ──────────────────────── */
+.demo-adv-btn-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #17b8a6; color: #fff;
+  border: none; border-radius: 99px;
+  padding: 5px 16px; font-size: .8rem; font-weight: 700;
+  cursor: pointer; transition: opacity .15s;
+  white-space: nowrap; letter-spacing: .02em;
+}
+.demo-adv-btn-pill:hover:not(:disabled) { opacity: .85; }
+.demo-adv-btn-pill:disabled { opacity: .45; cursor: not-allowed; }

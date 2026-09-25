@@ -374,167 +374,249 @@ def _run_demo():
         psh = {"syn": False, "ack": True,  "rst": False, "fin": False, "psh": True,  "urg": False}
         rst = {"syn": False, "ack": False, "rst": True,  "fin": False, "psh": False, "urg": False}
 
-        # ── Phase 1: DDoS SYN flood ────────────────────────────────────
-        # Mixed sources, varied packet sizes, not all to the same port
+        # ── Benign background helper ───────────────────────────────────
+        def send_benign(n: int = 80):
+            """Interleave realistic benign traffic to raise model uncertainty."""
+            legit = ["172.217.16.46", "151.101.1.140", "13.227.220.1",
+                     "8.8.4.4", "93.184.216.34"]
+            internal = ["192.168.1.10", "192.168.1.11", "192.168.1.12"]
+            for _ in range(n):
+                src = random.choice(internal)
+                dst = random.choice(legit)
+                proto = random.choice(["https", "dns", "http"])
+                if proto == "dns":
+                    words = ["google", "github", "amazon", "microsoft", "apple"]
+                    domain = random.choice(words) + ".com"
+                    _send(p, _make_pkt(src, "8.8.8.8",
+                                       random.randint(1024, 65535), 53,
+                                       protocol=17, pkt_len=random.randint(68, 82),
+                                       payload_len=random.randint(40, 55),
+                                       tcp_flags=None, dns_query=domain))
+                else:
+                    port = 443 if proto == "https" else 80
+                    flag = random.choice([psh, ack])
+                    _send(p, _make_pkt(src, dst,
+                                       random.randint(1024, 65535), port,
+                                       pkt_len=random.randint(200, 900),
+                                       payload_len=random.randint(150, 850),
+                                       tcp_flags=flag))
+
+        # ── Phase 1: DDoS — three tiers of intensity ──────────────────
+        # Tier A: full flood → CRITICAL (pkts/s very high)
+        # Tier B: moderate flood → HIGH
+        # Tier C: low flood mixed with benign → MEDIUM
         demo_state["phase"] = "DDoS SYN flood"
-        logger.info("[DEMO] Phase 1 – DDoS SYN flood")
-        targets = ["192.168.1.100", "192.168.1.101", "10.0.0.5"]
-        for i in range(4000):
+        logger.info("[DEMO] Phase 1 – DDoS SYN flood (mixed intensity)")
+
+        # Tier A — critical: tight burst, one target
+        for i in range(2500):
             src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
                   f"{random.randint(0,255)}.{random.randint(1,254)}"
-            dst = random.choice(targets)
-            port = random.choice([80, 443, 8080])
-            sz = random.randint(54, 78)
-            _send(p, _make_pkt(src, dst, random.randint(1024, 65535), port,
-                               pkt_len=sz, payload_len=0, tcp_flags=syn))
-            if i % 1000 == 999:
-                p.flush()
-                demo_state["progress"] = int((i + 1) / 4000 * 20)
+            _send(p, _make_pkt(src, "192.168.1.100",
+                               random.randint(1024, 65535), 80,
+                               pkt_len=60, payload_len=0, tcp_flags=syn))
+            if i % 500 == 499: p.flush()
+        p.flush()
+
+        # Tier B — high: spread across two targets, some ACKs mixed in
+        for i in range(800):
+            src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
+                  f"{random.randint(0,255)}.{random.randint(1,254)}"
+            dst = random.choice(["192.168.1.101", "10.0.0.5"])
+            flag = syn if random.random() < 0.75 else ack
+            _send(p, _make_pkt(src, dst,
+                               random.randint(1024, 65535), random.choice([80, 443]),
+                               pkt_len=random.randint(54, 80), payload_len=0, tcp_flags=flag))
+            if i % 200 == 199: p.flush()
+        p.flush()
+
+        # Tier C — medium: low rate, noisy, lots of benign mixed in
+        send_benign(60)
+        for i in range(300):
+            src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
+                  f"{random.randint(0,255)}.{random.randint(1,254)}"
+            _send(p, _make_pkt(src, "10.0.0.5",
+                               random.randint(1024, 65535), 8080,
+                               pkt_len=random.randint(54, 100), payload_len=0, tcp_flags=syn))
+            if i % 100 == 99: p.flush()
+        send_benign(40)
         p.flush()
         demo_state["progress"] = 20
 
-        # ── Phase 2: Port scan ─────────────────────────────────────────
-        # Varied scanner, partial RST responses, randomised port order
+        # ── Phase 2: Port scan — two scanners, different coverage ──────
+        # Scanner A: 500 ports → CRITICAL
+        # Scanner B: 80 ports → HIGH/MEDIUM
         demo_state["phase"] = "Port scan reconnaissance"
-        logger.info("[DEMO] Phase 2 – Port scan")
-        scanners = ["10.10.10.10", "172.16.0.99"]
-        target  = "192.168.1.200"
-        ports = list(range(1, 501))
-        random.shuffle(ports)
-        for i, port in enumerate(ports):
-            scanner = random.choice(scanners)
-            _send(p, _make_pkt(scanner, target,
+        logger.info("[DEMO] Phase 2 – Port scan (varied coverage)")
+
+        ports_a = list(range(1, 501))
+        random.shuffle(ports_a)
+        for i, port in enumerate(ports_a):
+            _send(p, _make_pkt("10.10.10.10", "192.168.1.200",
                                random.randint(40000, 60000), port,
                                pkt_len=random.randint(54, 66), payload_len=0, tcp_flags=syn))
             if random.random() < 0.92:
-                _send(p, _make_pkt(target, scanner, port,
+                _send(p, _make_pkt("192.168.1.200", "10.10.10.10", port,
                                    random.randint(40000, 60000),
                                    pkt_len=54, payload_len=0, tcp_flags=rst))
-            if i % 100 == 99:
-                p.flush()
-                demo_state["progress"] = 20 + int((i + 1) / 500 * 17)
+            if i % 100 == 99: p.flush()
+        p.flush()
+
+        send_benign(30)
+        ports_b = random.sample(range(1, 1024), 80)
+        for i, port in enumerate(ports_b):
+            _send(p, _make_pkt("172.16.0.99", "192.168.1.201",
+                               random.randint(40000, 60000), port,
+                               pkt_len=random.randint(54, 70), payload_len=0, tcp_flags=syn))
+            if random.random() < 0.85:
+                _send(p, _make_pkt("192.168.1.201", "172.16.0.99", port,
+                                   random.randint(40000, 60000),
+                                   pkt_len=54, payload_len=0, tcp_flags=rst))
+            if i % 20 == 19: p.flush()
         p.flush()
         demo_state["progress"] = 37
 
-        # ── Phase 3: DGA / DNS tunnelling ──────────────────────────────
-        # Realistic entropy mix — some short, some long random domains
+        # ── Phase 3: DGA — three confidence tiers ─────────────────────
+        # High-entropy random → confident malicious
+        # Medium-length random → moderate
+        # Short random that can resemble real names → lower
         demo_state["phase"] = "DGA / DNS tunnelling"
-        logger.info("[DEMO] Phase 3 – DGA domains")
-        chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-        tlds  = [".com", ".net", ".org", ".info", ".xyz", ".top", ".click"]
-        dga_hosts = ["192.168.1.50", "192.168.1.51"]
-        for i in range(100):
-            src = random.choice(dga_hosts)
-            length = random.randint(10, 26)
-            domain = "".join(random.choices(chars, k=length)) + random.choice(tlds)
-            _send(p, _make_pkt(src, "8.8.8.8",
+        logger.info("[DEMO] Phase 3 – DGA (entropy tiers)")
+        chars  = "abcdefghijklmnopqrstuvwxyz0123456789"
+        vowels = "aeiou"
+        cons   = "bcdfghjklmnpqrstvwxyz"
+        tlds   = [".com", ".net", ".org", ".info", ".xyz", ".top"]
+
+        # Tier A — long high-entropy (20–26 chars) → high confidence
+        for _ in range(50):
+            domain = "".join(random.choices(chars, k=random.randint(20, 26))) \
+                     + random.choice(tlds)
+            _send(p, _make_pkt("192.168.1.50", "8.8.8.8",
                                random.randint(1024, 65535), 53,
-                               protocol=17,
-                               pkt_len=random.randint(72, 95),
-                               payload_len=random.randint(50, 70),
+                               protocol=17, pkt_len=random.randint(80, 96),
+                               payload_len=random.randint(55, 72),
                                tcp_flags=None, dns_query=domain))
-            if i % 25 == 24:
-                p.flush()
-                demo_state["progress"] = 37 + int((i + 1) / 100 * 13)
+
+        # Tier B — medium length (12–18 chars), mixed chars → medium confidence
+        for _ in range(30):
+            domain = "".join(random.choices(chars, k=random.randint(12, 18))) \
+                     + random.choice(tlds)
+            _send(p, _make_pkt("192.168.1.51", "8.8.8.8",
+                               random.randint(1024, 65535), 53,
+                               protocol=17, pkt_len=random.randint(72, 85),
+                               payload_len=random.randint(48, 60),
+                               tcp_flags=None, dns_query=domain))
+
+        # Tier C — short (8–11 chars), consonant-vowel alternating → lower
+        for _ in range(20):
+            pattern = ""
+            for j in range(random.randint(8, 11)):
+                pattern += random.choice(vowels if j % 2 else cons)
+            domain = pattern + random.choice([".com", ".net"])
+            _send(p, _make_pkt("192.168.1.51", "8.8.8.8",
+                               random.randint(1024, 65535), 53,
+                               protocol=17, pkt_len=random.randint(68, 78),
+                               payload_len=random.randint(40, 52),
+                               tcp_flags=None, dns_query=domain))
+
+        send_benign(20)
         p.flush()
         demo_state["progress"] = 50
 
-        # ── Phase 4: Encrypted malware — non-standard port, real duration ─
-        # duration >= 5s requires real wall-clock spread; use 3 pairs × 6s each
-        # fwd_bytes_per_conn >= 500, bytes_per_conn >= 700, psh_per_conn >= 3
+        # ── Phase 4: Encrypted malware — real-time spread ─────────────
         demo_state["phase"] = "Encrypted malware traffic"
-        logger.info("[DEMO] Phase 4 – Encrypted malware (real-time spread)")
+        logger.info("[DEMO] Phase 4 – Encrypted malware")
         enc_pairs = [
             ("10.20.30.40", "91.230.14.11",   4444),
             ("10.20.30.41", "185.220.101.55",  7788),
             ("10.20.30.42", "94.102.49.190",   6667),
         ]
-        for enc_src, enc_dst, enc_port in enc_pairs:
+        for idx, (enc_src, enc_dst, enc_port) in enumerate(enc_pairs):
             sport = random.randint(40000, 58000)
-            # SYN to open
             _send(p, _make_pkt(enc_src, enc_dst, sport, enc_port,
                                pkt_len=60, payload_len=0, tcp_flags=syn))
             p.flush()
-            # 12 PSH packets spread over ~6s real time
-            for i in range(12):
+            # Vary packet count per pair: 14, 10, 8 → different flow volumes
+            pkt_counts = [14, 10, 8]
+            n = pkt_counts[idx]
+            for i in range(n):
                 time.sleep(0.55)
                 _send(p, _make_pkt(enc_src, enc_dst, sport, enc_port,
-                                   pkt_len=random.randint(120, 160),
-                                   payload_len=random.randint(90, 130),
+                                   pkt_len=random.randint(110, 160),
+                                   payload_len=random.randint(80, 130),
                                    tcp_flags=psh))
-                # Every 3rd packet gets a response
                 if i % 3 == 2:
                     _send(p, _make_pkt(enc_dst, enc_src, enc_port, sport,
-                                       pkt_len=random.randint(240, 300),
-                                       payload_len=random.randint(200, 260),
+                                       pkt_len=random.randint(220, 310),
+                                       payload_len=random.randint(180, 270),
                                        tcp_flags=psh))
                 p.flush()
-            demo_state["progress"] = 50 + int((enc_pairs.index((enc_src, enc_dst, enc_port)) + 1) / len(enc_pairs) * 13)
+            demo_state["progress"] = 50 + int((idx + 1) / len(enc_pairs) * 13)
         demo_state["progress"] = 63
 
-        # ── Phase 5: C2 beaconing — SYN + data packets, 2s apart ──────
-        # SYN recorded by c2_conn_events; PSH data for estab check
-        # MIN_BEACONS_STRICT=5, intervals must be 1-900s, cv<0.5
+        # ── Phase 5: C2 beaconing — two pairs, different jitter ────────
+        # Pair A: tight 2s interval (cv≈0) → CRITICAL
+        # Pair B: looser interval with jitter (cv≈0.25) → HIGH
         demo_state["phase"] = "C2 beaconing"
-        logger.info("[DEMO] Phase 5 – C2 beaconing (spaced over ~16s)")
+        logger.info("[DEMO] Phase 5 – C2 beaconing")
         c2_pairs = [
-            ("10.30.40.50", "91.234.56.78",   9001),
-            ("10.30.40.51", "45.142.212.100",  4443),
+            ("10.30.40.50", "91.234.56.78",    9001, 2.0, 0.05),   # tight
+            ("10.30.40.51", "45.142.212.100",   4443, 2.0, 0.40),  # jittery
         ]
-        beacon_interval = 2.0
         beacons_per_pair = 8
         base_ts_c2 = int(time.time() * 1_000_000)
         for beat in range(beacons_per_pair):
-            for c2_src, c2_dst, c2_port in c2_pairs:
-                offset_us = int(beat * beacon_interval * 1_000_000)
+            for c2_src, c2_dst, c2_port, interval, jitter_cv in c2_pairs:
+                actual_iv = interval * (1 + random.uniform(-jitter_cv, jitter_cv))
+                offset_us = int(beat * interval * 1_000_000)
                 sport = random.randint(49000, 55000)
-                # SYN — this is what gets recorded by c2_conn_events
                 syn_pkt = _make_pkt(c2_src, c2_dst, sport, c2_port,
                                     pkt_len=60, payload_len=0, tcp_flags=syn)
                 syn_pkt["timestamp_us"] = base_ts_c2 + offset_us
                 _send(p, syn_pkt)
-                # PSH data packet (small outbound — beacon check-in)
                 data_pkt = _make_pkt(c2_src, c2_dst, sport, c2_port,
-                                     pkt_len=random.randint(110, 140),
-                                     payload_len=random.randint(70, 100),
+                                     pkt_len=random.randint(100, 145),
+                                     payload_len=random.randint(65, 105),
                                      tcp_flags=psh)
                 data_pkt["timestamp_us"] = base_ts_c2 + offset_us + 20_000
                 _send(p, data_pkt)
-                # Inbound response (larger)
                 resp_pkt = _make_pkt(c2_dst, c2_src, c2_port, sport,
-                                     pkt_len=random.randint(350, 450),
-                                     payload_len=random.randint(300, 400),
+                                     pkt_len=random.randint(320, 460),
+                                     payload_len=random.randint(280, 420),
                                      tcp_flags=psh)
                 resp_pkt["timestamp_us"] = base_ts_c2 + offset_us + 50_000
                 _send(p, resp_pkt)
             p.flush()
             if beat < beacons_per_pair - 1:
-                time.sleep(beacon_interval)
+                time.sleep(2.0)
             demo_state["progress"] = 63 + int((beat + 1) / beacons_per_pair * 20)
         p.flush()
         demo_state["progress"] = 83
 
-        # ── Phase 6: Data exfiltration ─────────────────────────────────
-        # Large asymmetric upload: many big outbound, few tiny ACK responses
+        # ── Phase 6: Exfiltration — two pairs, different upload ratio ──
+        # Pair A: 350 pkts upload, 4 ACKs → score ≈ 1.0 (CRITICAL)
+        # Pair B: 120 pkts upload, 20 ACKs → lower ratio → HIGH/MEDIUM
         demo_state["phase"] = "Data exfiltration"
-        logger.info("[DEMO] Phase 6 – Data exfiltration")
-        exf_pairs = [
-            ("192.168.1.60", "185.100.200.50", 443),
-            ("192.168.1.61", "104.21.90.77",   8443),
+        logger.info("[DEMO] Phase 6 – Data exfiltration (varied intensity)")
+        exf_scenarios = [
+            ("192.168.1.60", "185.100.200.50", 443,  350, 4),
+            ("192.168.1.61", "104.21.90.77",   8443, 120, 20),
         ]
-        for exf_src, exf_dst, exf_port in exf_pairs:
-            _send(p, _make_pkt(exf_src, exf_dst, 51000, exf_port,
+        for exf_src, exf_dst, exf_port, up_pkts, dn_pkts in exf_scenarios:
+            sport = random.randint(50000, 53000)
+            _send(p, _make_pkt(exf_src, exf_dst, sport, exf_port,
                                pkt_len=60, payload_len=0, tcp_flags=syn))
-            for i in range(350):
-                _send(p, _make_pkt(exf_src, exf_dst, 51000, exf_port,
+            for i in range(up_pkts):
+                _send(p, _make_pkt(exf_src, exf_dst, sport, exf_port,
                                    pkt_len=random.randint(1200, 1460),
                                    payload_len=random.randint(1100, 1400),
                                    tcp_flags=psh))
-                if i % 100 == 99:
-                    p.flush()
-            for _ in range(4):
-                _send(p, _make_pkt(exf_dst, exf_src, exf_port, 51000,
-                                   pkt_len=60, payload_len=0, tcp_flags=ack))
+                if i % 100 == 99: p.flush()
+            for _ in range(dn_pkts):
+                _send(p, _make_pkt(exf_dst, exf_src, exf_port, sport,
+                                   pkt_len=random.randint(60, 200),
+                                   payload_len=random.randint(20, 160),
+                                   tcp_flags=ack))
             p.flush()
         demo_state["progress"] = 100
 

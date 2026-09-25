@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, RadarChart, PolarGrid, PolarAngleAxis, Radar,
 } from 'recharts'
 import { exportPdf } from './report'
-import { useDemoSimulation } from './useDemoSimulation'
+import type { DemoState } from './useDemoSimulation'
 
 /* ── Types ─────────────────────────────────────── */
 interface Alert {
@@ -202,7 +202,15 @@ function Kpi({ name, value, unit, tone, sub, trend, spark, sparkColor }: {
 }
 
 /* ── Advanced console (existing expert view) ─────── */
-export default function AdvancedConsole({ onBackToSimple }: { onBackToSimple?: () => void }) {
+export default function AdvancedConsole({
+  onBackToSimple,
+  demoState: demo,
+  onRunDemo: runDemo,
+}: {
+  onBackToSimple?: () => void
+  demoState: DemoState
+  onRunDemo: () => void
+}) {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
   const [live, setLive] = useState(false)
@@ -223,7 +231,6 @@ export default function AdvancedConsole({ onBackToSimple }: { onBackToSimple?: (
   const ws = useRef<WebSocket | null>(null)
   const retry = useRef<number | null>(null)
   const seen = useRef(0)
-  const { state: demo, trigger: runDemo } = useDemoSimulation()
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000)
@@ -568,6 +575,24 @@ export default function AdvancedConsole({ onBackToSimple }: { onBackToSimple?: (
                 ‹ Simple view
               </button>
             )}
+            {/* ── Demo button — in tab bar for max visibility ── */}
+            {demo.running ? (
+              <span className="demo-adv-progress">
+                <span className="demo-adv-phase">{demo.phase}</span>
+                <span className="demo-adv-rail">
+                  <span className="demo-adv-fill" style={{ width: `${demo.progress}%` }} />
+                </span>
+                <span className="demo-adv-pct">{demo.progress}%</span>
+              </span>
+            ) : (
+              <button
+                className="demo-adv-btn-pill"
+                onClick={runDemo}
+                title="Inject all 6 attack types into the live pipeline"
+              >
+                ▶ Simulate Attack
+              </button>
+            )}
             <button className="theme-toggle"
               onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
               title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
@@ -592,24 +617,6 @@ export default function AdvancedConsole({ onBackToSimple }: { onBackToSimple?: (
           <button className="tool-btn">⧉ Enclave: read-only</button>
           <button className="tool-btn">◷ Window 10s</button>
           <button className="tool-btn">⌗ v{alerts[0]?.model_version ?? '1.0.0'}</button>
-          {/* ── Demo button ── */}
-          {demo.running ? (
-            <span className="demo-adv-progress">
-              <span className="demo-adv-phase">{demo.phase}</span>
-              <span className="demo-adv-rail">
-                <span className="demo-adv-fill" style={{ width: `${demo.progress}%` }} />
-              </span>
-              <span className="demo-adv-pct">{demo.progress}%</span>
-            </span>
-          ) : (
-            <button
-              className="tool-btn demo-adv-btn"
-              onClick={runDemo}
-              title="Inject all 5 attack types into the live pipeline"
-            >
-              ▶ Simulate Attack
-            </button>
-          )}
           <span className="tool-note">
             <span className="mono">Synced {hhmmss(synced)}</span>
             <button className="ptool" title="Refresh now" onClick={pull}>⟳</button>
