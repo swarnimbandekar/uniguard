@@ -266,7 +266,7 @@ export default function AdvancedConsole({
      events don't appear on the chart (matches Simple view behaviour). */
   useEffect(() => {
     if (!alerts.length) return
-    const cutoff = now.getTime() / 1000 - 15 * 60
+    const cutoff = now.getTime() / 1000 - 30 * 60
     const newSlots: Slot[] = []
     for (const a of [...alerts].reverse()) {
       if (a.timestamp < cutoff) continue
@@ -296,8 +296,9 @@ export default function AdvancedConsole({
   }, [alerts, now])
 
   /* ── derived ── */
-  /* Rolling 10-min window — same cutoff as Simple view — for live KPIs */
-  const LIVE_WINDOW_SEC = 600
+  /* Rolling 30-min window for the advanced live panels — analyst view so
+     we keep more history than the simple view's 15-min window. */
+  const LIVE_WINDOW_SEC = 1800
   const recent = useMemo(
     () => alerts.filter(a => a.timestamp >= now.getTime() / 1000 - LIVE_WINDOW_SEC),
     [alerts, now]
@@ -668,16 +669,16 @@ export default function AdvancedConsole({
               sub="since enclave start" spark={pulse} sparkColor={K.ok}
               trend={{ dir: lastPulse ? 'up' : 'flat', txt: `${lastPulse}/2s` }} />
             <Kpi name="Critical" value={compact(crit)} tone="crit"
-              sub="confidence ≥ 90% · last 10 min" spark={classSpark('DDoS')} sparkColor={K.crit}
+              sub="confidence ≥ 90% · last 30 min" spark={classSpark('DDoS')} sparkColor={K.crit}
               trend={{ dir: crit ? 'up' : 'flat', txt: recent.length ? `${((crit / recent.length) * 100).toFixed(0)}%` : '0%' }} />
             <Kpi name="High" value={compact(high)} tone="med"
-              sub="confidence 82–90% · last 10 min" spark={classSpark('PortScan')} sparkColor={K.high} />
+              sub="confidence 82–90% · last 30 min" spark={classSpark('PortScan')} sparkColor={K.high} />
             <Kpi name="Alerts / min" value={perMin.toFixed(1)}
               sub="observed arrival rate" spark={pulse} sparkColor={K.info} />
             <Kpi name="Mean confidence" value={`${(avgConf * 100).toFixed(0)}`} unit="%" tone="ok"
-              sub={`across ${recent.length} live events`} />
+              sub={`across ${recent.length} live events · last 30 min`} />
             <Kpi name="Threat sources" value={compact(srcN)}
-              sub="distinct origins · last 10 min" spark={classSpark('DGA')} sparkColor={K.med} />
+              sub="distinct origins · last 30 min" spark={classSpark('DGA')} sparkColor={K.med} />
           </div>
           )}
 
@@ -714,7 +715,7 @@ export default function AdvancedConsole({
               </div>
             </Panel>
 
-            <Panel name="Threat class mix" foot={`${dist.length} active classes · last 10 min`}>
+            <Panel name="Threat class mix" foot={`${dist.length} active classes · last 30 min`}>
               <div style={{ height: 224, position: 'relative' }}>
                 {dist.length ? (
                   <>
@@ -770,7 +771,7 @@ export default function AdvancedConsole({
           {/* Sources + radar + modules + rank */}
           {tab === 0 && (
           <div className="grid g-quad">
-            <Panel name="Top source addresses" foot="ranked by alert count · last 10 min">
+            <Panel name="Top source addresses" foot="ranked by alert count · last 30 min">
               <div style={{ height: 196, padding: '12px 12px 0 0' }}>
                 {topSrc.length ? (
                   <ResponsiveContainer width="100%" height="100%">
@@ -823,7 +824,7 @@ export default function AdvancedConsole({
               })}
             </Panel>
 
-            <Panel name="Highest-risk sources" foot="score = alert volume × mean confidence · last 10 min">
+            <Panel name="Highest-risk sources" foot="score = alert volume × mean confidence · last 30 min">
               {topSrc.length ? topSrc.slice(0, 6).map((s, i) => {
                 const hits = recent.filter(a => a.src_ip === s.full)
                 const mc = hits.length ? hits.reduce((x, a) => x + a.confidence, 0) / hits.length : 0
