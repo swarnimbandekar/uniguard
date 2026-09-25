@@ -401,14 +401,15 @@ def _run_demo():
                                        payload_len=random.randint(150, 850),
                                        tcp_flags=flag))
 
-        # ── Phase 1: DDoS — three tiers of intensity ──────────────────
-        # Tier A: full flood → CRITICAL (pkts/s very high)
-        # Tier B: moderate flood → HIGH
-        # Tier C: low flood mixed with benign → MEDIUM
+        # ── Phase 1: DDoS — three tiers, DIFFERENT destination IPs ──────
+        # Each dst is scored independently by the feature extractor
+        # Tier A: dst=192.168.1.100, 2500 pkts at max rate → score 0.99 → CRITICAL
+        # Tier B: dst=192.168.1.101, 400 pkts, pkt_rate ~40/s → score ~0.91 → HIGH
+        # Tier C: dst=10.0.0.5,       150 pkts, pkt_rate ~15/s → score ~0.90 → MEDIUM
         demo_state["phase"] = "DDoS SYN flood"
-        logger.info("[DEMO] Phase 1 – DDoS SYN flood (mixed intensity)")
+        logger.info("[DEMO] Phase 1 – DDoS SYN flood (intensity tiers)")
 
-        # Tier A — critical: tight burst, one target
+        # Tier A — CRITICAL
         for i in range(2500):
             src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
                   f"{random.randint(0,255)}.{random.randint(1,254)}"
@@ -418,34 +419,36 @@ def _run_demo():
             if i % 500 == 499: p.flush()
         p.flush()
 
-        # Tier B — high: spread across two targets, some ACKs mixed in
-        for i in range(800):
+        # Tier B — HIGH: fewer packets, mixed flags, different dst
+        send_benign(30)
+        for i in range(400):
             src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
                   f"{random.randint(0,255)}.{random.randint(1,254)}"
-            dst = random.choice(["192.168.1.101", "10.0.0.5"])
-            flag = syn if random.random() < 0.75 else ack
-            _send(p, _make_pkt(src, dst,
+            flag = syn if random.random() < 0.70 else ack
+            _send(p, _make_pkt(src, "192.168.1.101",
                                random.randint(1024, 65535), random.choice([80, 443]),
-                               pkt_len=random.randint(54, 80), payload_len=0, tcp_flags=flag))
-            if i % 200 == 199: p.flush()
+                               pkt_len=random.randint(54, 90), payload_len=0,
+                               tcp_flags=flag))
+            if i % 100 == 99: p.flush()
         p.flush()
 
-        # Tier C — medium: low rate, noisy, lots of benign mixed in
-        send_benign(60)
-        for i in range(300):
+        # Tier C — MEDIUM: low rate, noisy, different dst
+        send_benign(50)
+        for i in range(150):
             src = f"{random.randint(1,223)}.{random.randint(0,255)}." \
                   f"{random.randint(0,255)}.{random.randint(1,254)}"
             _send(p, _make_pkt(src, "10.0.0.5",
                                random.randint(1024, 65535), 8080,
-                               pkt_len=random.randint(54, 100), payload_len=0, tcp_flags=syn))
-            if i % 100 == 99: p.flush()
-        send_benign(40)
+                               pkt_len=random.randint(54, 120), payload_len=0,
+                               tcp_flags=syn))
+            if i % 50 == 49: p.flush()
+        send_benign(30)
         p.flush()
         demo_state["progress"] = 20
 
-        # ── Phase 2: Port scan — two scanners, different coverage ──────
-        # Scanner A: 500 ports → CRITICAL
-        # Scanner B: 80 ports → HIGH/MEDIUM
+        # ── Phase 2: Port scan — two scanners, varied port coverage ────
+        # Scanner A: 500 ports → model score near 1.0 → CRITICAL
+        # Scanner B: 25 ports  → lower score → MEDIUM/LOW
         demo_state["phase"] = "Port scan reconnaissance"
         logger.info("[DEMO] Phase 2 – Port scan (varied coverage)")
 
@@ -454,7 +457,8 @@ def _run_demo():
         for i, port in enumerate(ports_a):
             _send(p, _make_pkt("10.10.10.10", "192.168.1.200",
                                random.randint(40000, 60000), port,
-                               pkt_len=random.randint(54, 66), payload_len=0, tcp_flags=syn))
+                               pkt_len=random.randint(54, 66), payload_len=0,
+                               tcp_flags=syn))
             if random.random() < 0.92:
                 _send(p, _make_pkt("192.168.1.200", "10.10.10.10", port,
                                    random.randint(40000, 60000),
@@ -463,23 +467,21 @@ def _run_demo():
         p.flush()
 
         send_benign(30)
-        ports_b = random.sample(range(1, 1024), 80)
+        # Scanner B: only 25 ports (still above the unique_ports >= 10 gate)
+        ports_b = random.sample(range(1, 1024), 25)
         for i, port in enumerate(ports_b):
             _send(p, _make_pkt("172.16.0.99", "192.168.1.201",
                                random.randint(40000, 60000), port,
-                               pkt_len=random.randint(54, 70), payload_len=0, tcp_flags=syn))
-            if random.random() < 0.85:
+                               pkt_len=random.randint(54, 70), payload_len=0,
+                               tcp_flags=syn))
+            if random.random() < 0.70:
                 _send(p, _make_pkt("192.168.1.201", "172.16.0.99", port,
                                    random.randint(40000, 60000),
                                    pkt_len=54, payload_len=0, tcp_flags=rst))
-            if i % 20 == 19: p.flush()
         p.flush()
         demo_state["progress"] = 37
 
-        # ── Phase 3: DGA — three confidence tiers ─────────────────────
-        # High-entropy random → confident malicious
-        # Medium-length random → moderate
-        # Short random that can resemble real names → lower
+        # ── Phase 3: DGA — three entropy tiers ─────────────────────────
         demo_state["phase"] = "DGA / DNS tunnelling"
         logger.info("[DEMO] Phase 3 – DGA (entropy tiers)")
         chars  = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -487,7 +489,7 @@ def _run_demo():
         cons   = "bcdfghjklmnpqrstvwxyz"
         tlds   = [".com", ".net", ".org", ".info", ".xyz", ".top"]
 
-        # Tier A — long high-entropy (20–26 chars) → high confidence
+        # Tier A: 20–26 char random → very high entropy → CRITICAL
         for _ in range(50):
             domain = "".join(random.choices(chars, k=random.randint(20, 26))) \
                      + random.choice(tlds)
@@ -497,9 +499,9 @@ def _run_demo():
                                payload_len=random.randint(55, 72),
                                tcp_flags=None, dns_query=domain))
 
-        # Tier B — medium length (12–18 chars), mixed chars → medium confidence
+        # Tier B: 12–17 char mixed → medium entropy → HIGH
         for _ in range(30):
-            domain = "".join(random.choices(chars, k=random.randint(12, 18))) \
+            domain = "".join(random.choices(chars, k=random.randint(12, 17))) \
                      + random.choice(tlds)
             _send(p, _make_pkt("192.168.1.51", "8.8.8.8",
                                random.randint(1024, 65535), 53,
@@ -507,7 +509,7 @@ def _run_demo():
                                payload_len=random.randint(48, 60),
                                tcp_flags=None, dns_query=domain))
 
-        # Tier C — short (8–11 chars), consonant-vowel alternating → lower
+        # Tier C: 8–11 char, alternating consonant-vowel → resembles real words → MEDIUM/LOW
         for _ in range(20):
             pattern = ""
             for j in range(random.randint(8, 11)):
