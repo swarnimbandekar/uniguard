@@ -414,6 +414,10 @@ export default function AdvancedConsole({
   /* ── Incident ledger (filters + CSV export + full history) ── */
   const ledgerFilters = (
     <div className="ledger-filters">
+      <div className="seg" style={{ flexShrink: 0 }}>
+        <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>All</button>
+        <button className={scope === 'crit' ? 'on' : ''} onClick={() => setScope('crit')}>Critical only</button>
+      </div>
       <input
         className="fld-input"
         placeholder="Search IP, port, flow id…"
@@ -563,10 +567,6 @@ export default function AdvancedConsole({
 
         {/* ── Toolbar ── */}
         <div className="toolbar">
-          <div className="seg">
-            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>All severities</button>
-            <button className={scope === 'crit' ? 'on' : ''} onClick={() => setScope('crit')}>Critical only</button>
-          </div>
           <button className="tool-btn">UniGuard</button>
           <button className="tool-btn">⧉ Read-only</button>
           <button className="tool-btn">◷ Window 10s</button>
