@@ -440,75 +440,81 @@ def _run_demo():
         demo_state["progress"] = 50
 
         # ── Phase 4: Encrypted malware — non-standard port, long flow ──
-        # Port 4444/7788, duration >5s, asymmetric, 6+ packets, low BW
-        # We fake packet timestamps spread over 8 seconds by sending many
-        # packets with slightly increasing timestamp_us values
+        # fwd_bytes_per_conn >= 500, bytes_per_conn >= 700, psh_per_conn >= 3
+        # Use completely fresh IPs not used elsewhere in the demo
         demo_state["phase"] = "Encrypted malware traffic"
         logger.info("[DEMO] Phase 4 – Encrypted malware")
         enc_pairs = [
-            ("192.168.1.70", "91.230.14.11",  4444),
-            ("192.168.1.71", "185.220.101.55", 7788),
-            ("192.168.1.72", "94.102.49.190",  8888),
+            ("10.20.30.40", "91.230.14.11",   4444),
+            ("10.20.30.41", "185.220.101.55",  7788),
+            ("10.20.30.42", "94.102.49.190",   6667),
         ]
         base_ts = int(time.time() * 1_000_000)
         for enc_src, enc_dst, enc_port in enc_pairs:
-            # Send 30 packets spread over ~8 seconds of fake time
-            for i in range(30):
-                offset_us = i * 280_000  # 280ms apart → 8.4s span
-                fwd = i % 3 != 0   # mostly outbound, some inbound
-                if fwd:
-                    pkt = _make_pkt(enc_src, enc_dst,
-                                    random.randint(40000, 60000), enc_port,
-                                    pkt_len=random.randint(100, 180),
-                                    payload_len=random.randint(60, 130),
-                                    tcp_flags=psh)
-                else:
-                    pkt = _make_pkt(enc_dst, enc_src,
-                                    enc_port, random.randint(40000, 60000),
-                                    pkt_len=random.randint(300, 450),
-                                    payload_len=random.randint(250, 400),
-                                    tcp_flags=psh)
+            # One SYN to open the session
+            syn_pkt = _make_pkt(enc_src, enc_dst,
+                                random.randint(40000, 60000), enc_port,
+                                pkt_len=60, payload_len=0, tcp_flags=syn)
+            syn_pkt["timestamp_us"] = base_ts
+            _send(p, syn_pkt)
+            # 15 forward PSH packets (~80 bytes payload each) → fwd_bytes ≈ 1200
+            sport = random.randint(40000, 60000)
+            for i in range(15):
+                offset_us = (i + 1) * 300_000   # 300ms apart → 4.5s span
+                pkt = _make_pkt(enc_src, enc_dst, sport, enc_port,
+                                pkt_len=random.randint(110, 150),
+                                payload_len=random.randint(80, 120),
+                                tcp_flags=psh)
+                pkt["timestamp_us"] = base_ts + offset_us
+                _send(p, pkt)
+            # 6 backward PSH responses (~200 bytes) → bwd_bytes ≈ 1200
+            for i in range(6):
+                offset_us = (i + 1) * 700_000
+                pkt = _make_pkt(enc_dst, enc_src, enc_port, sport,
+                                pkt_len=random.randint(230, 270),
+                                payload_len=random.randint(180, 220),
+                                tcp_flags=psh)
                 pkt["timestamp_us"] = base_ts + offset_us
                 _send(p, pkt)
             p.flush()
         demo_state["progress"] = 63
 
-        # ── Phase 5: C2 beaconing — spaced connections over real time ──
-        # MIN_BEACONS_STRICT=5, MIN_INTERVAL=1s, MAX_INTERVAL=900s, CV<0.5
-        # Send 8 SYN connections spaced ~2s apart = 14s total span, cv≈0
+        # ── Phase 5: C2 beaconing — SYN + data packets, 2s apart ──────
+        # SYN recorded by c2_conn_events; PSH data for estab check
+        # MIN_BEACONS_STRICT=5, intervals must be 1-900s, cv<0.5
         demo_state["phase"] = "C2 beaconing"
         logger.info("[DEMO] Phase 5 – C2 beaconing (spaced over ~16s)")
         c2_pairs = [
-            ("192.168.1.55", "91.234.56.78",  9001),
-            ("192.168.1.56", "45.142.212.100", 4443),
+            ("10.30.40.50", "91.234.56.78",   9001),
+            ("10.30.40.51", "45.142.212.100",  4443),
         ]
-        beacon_interval = 2.0   # 2s between beacons → well within 1–900s window
+        beacon_interval = 2.0
         beacons_per_pair = 8
-        # Send beacons for both pairs interleaved
         base_ts_c2 = int(time.time() * 1_000_000)
         for beat in range(beacons_per_pair):
             for c2_src, c2_dst, c2_port in c2_pairs:
                 offset_us = int(beat * beacon_interval * 1_000_000)
-                # Outbound beacon (small payload)
-                out_pkt = _make_pkt(c2_src, c2_dst,
-                                    random.randint(49000, 55000), c2_port,
-                                    pkt_len=random.randint(110, 140),
-                                    payload_len=random.randint(70, 100),
-                                    tcp_flags=psh)
-                out_pkt["timestamp_us"] = base_ts_c2 + offset_us
-                _send(p, out_pkt)
+                sport = random.randint(49000, 55000)
+                # SYN — this is what gets recorded by c2_conn_events
+                syn_pkt = _make_pkt(c2_src, c2_dst, sport, c2_port,
+                                    pkt_len=60, payload_len=0, tcp_flags=syn)
+                syn_pkt["timestamp_us"] = base_ts_c2 + offset_us
+                _send(p, syn_pkt)
+                # PSH data packet (small outbound — beacon check-in)
+                data_pkt = _make_pkt(c2_src, c2_dst, sport, c2_port,
+                                     pkt_len=random.randint(110, 140),
+                                     payload_len=random.randint(70, 100),
+                                     tcp_flags=psh)
+                data_pkt["timestamp_us"] = base_ts_c2 + offset_us + 20_000
+                _send(p, data_pkt)
                 # Inbound response (larger)
-                in_pkt = _make_pkt(c2_dst, c2_src,
-                                   c2_port, random.randint(49000, 55000),
-                                   pkt_len=random.randint(350, 450),
-                                   payload_len=random.randint(300, 400),
-                                   tcp_flags=psh)
-                in_pkt["timestamp_us"] = base_ts_c2 + offset_us + 50_000
-                _send(p, in_pkt)
+                resp_pkt = _make_pkt(c2_dst, c2_src, c2_port, sport,
+                                     pkt_len=random.randint(350, 450),
+                                     payload_len=random.randint(300, 400),
+                                     tcp_flags=psh)
+                resp_pkt["timestamp_us"] = base_ts_c2 + offset_us + 50_000
+                _send(p, resp_pkt)
             p.flush()
-            # Real sleep so timestamps span real wall-clock time — the
-            # feature extractor's periodicity detector uses observe() calls
-            # as they arrive, so real time gaps are what matters
             if beat < beacons_per_pair - 1:
                 time.sleep(beacon_interval)
             demo_state["progress"] = 63 + int((beat + 1) / beacons_per_pair * 20)
