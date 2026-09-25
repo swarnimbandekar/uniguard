@@ -316,16 +316,25 @@ export default function AdvancedConsole({
     : '—'
 
   const dist = useMemo(
-    () => (stats ? Object.entries(stats.by_threat_class).map(([name, value]) => ({ name, value })) : []),
-    [stats]
+    () => {
+      const counts: Record<string, number> = {}
+      for (const a of recent) counts[a.threat_class] = (counts[a.threat_class] ?? 0) + 1
+      return Object.entries(counts).map(([name, value]) => ({ name, value }))
+    },
+    [recent]
   )
   const topSrc = useMemo(
-    () => (stats
-      ? Object.entries(stats.top_sources).slice(0, 6).map(([ip, count]) => ({
-        ip: ip.length > 15 ? `${ip.slice(0, 13)}…` : ip, full: ip, count,
-      }))
-      : []),
-    [stats]
+    () => {
+      const counts = new Map<string, number>()
+      for (const a of recent) counts.set(a.src_ip, (counts.get(a.src_ip) ?? 0) + 1)
+      return Array.from(counts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([ip, count]) => ({
+          ip: ip.length > 15 ? `${ip.slice(0, 13)}…` : ip, full: ip, count,
+        }))
+    },
+    [recent]
   )
   const radar = useMemo(
     () => MODULES.map(m => ({
@@ -705,7 +714,7 @@ export default function AdvancedConsole({
               </div>
             </Panel>
 
-            <Panel name="Threat class mix" foot={`${dist.length} active classes of 6 defined`}>
+            <Panel name="Threat class mix" foot={`${dist.length} active classes · last 10 min`}>
               <div style={{ height: 224, position: 'relative' }}>
                 {dist.length ? (
                   <>
@@ -719,8 +728,8 @@ export default function AdvancedConsole({
                       </PieChart>
                     </ResponsiveContainer>
                     <div style={{ position: 'absolute', inset: 0, display: 'grid', placeContent: 'center', textAlign: 'center', pointerEvents: 'none' }}>
-                      <div className="mono" style={{ fontSize: 24, fontWeight: 700 }}>{compact(total)}</div>
-                      <div className="eyebrow" style={{ fontSize: 9 }}>events</div>
+                      <div className="mono" style={{ fontSize: 24, fontWeight: 700 }}>{compact(recent.length)}</div>
+                      <div className="eyebrow" style={{ fontSize: 9 }}>live events</div>
                     </div>
                   </>
                 ) : <div className="chart-blank">no classified events</div>}
@@ -739,8 +748,8 @@ export default function AdvancedConsole({
             <Panel name="Severity distribution" foot="bands: ≥90 critical · ≥82 high · ≥74 medium">
               <div style={{ padding: 14 }}>
                 {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map(s => {
-                  const n = alerts.filter(a => a.severity === s).length
-                  const pct = alerts.length ? (n / alerts.length) * 100 : 0
+                  const n = recent.filter(a => a.severity === s).length
+                  const pct = recent.length ? (n / recent.length) * 100 : 0
                   return (
                     <div className="meter" key={s}>
                       <div className="meter-hd">
@@ -761,7 +770,7 @@ export default function AdvancedConsole({
           {/* Sources + radar + modules + rank */}
           {tab === 0 && (
           <div className="grid g-quad">
-            <Panel name="Top source addresses" foot="ranked by alert count in buffer">
+            <Panel name="Top source addresses" foot="ranked by alert count · last 10 min">
               <div style={{ height: 196, padding: '12px 12px 0 0' }}>
                 {topSrc.length ? (
                   <ResponsiveContainer width="100%" height="100%">
@@ -814,9 +823,9 @@ export default function AdvancedConsole({
               })}
             </Panel>
 
-            <Panel name="Highest-risk sources" foot="score = alert volume × mean confidence">
+            <Panel name="Highest-risk sources" foot="score = alert volume × mean confidence · last 10 min">
               {topSrc.length ? topSrc.slice(0, 6).map((s, i) => {
-                const hits = alerts.filter(a => a.src_ip === s.full)
+                const hits = recent.filter(a => a.src_ip === s.full)
                 const mc = hits.length ? hits.reduce((x, a) => x + a.confidence, 0) / hits.length : 0
                 const risk = Math.min(Math.round((s.count * 6) + mc * 40), 100)
                 const hue = risk >= 80 ? K.crit : risk >= 55 ? K.high : K.med
