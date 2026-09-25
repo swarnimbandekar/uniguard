@@ -83,7 +83,7 @@ const MODULES = [
   { n: 'Data Exfiltration', a: 'HistGradientBoosting · 29f · 77K flows/s', k: 'DataExfiltration', on: true },
 ]
 
-const TABS = ['Threat Posture', 'Live Feed', 'Detection Engines', 'Telemetry', 'Flow Records']
+const TABS = ['Threat Posture', 'Detection Engines', 'Flow Records']
 
 /* ── Utils ─────────────────────────────────────── */
 const hhmmss = (d: Date) =>
@@ -581,7 +581,7 @@ export default function AdvancedConsole({
         {/* ── Canvas ── */}
         <div className="canvas">
           {/* Pipeline health */}
-          {(tab === 0 || tab === 2) && (
+          {(tab === 0 || tab === 1) && (
           <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
             <Panel name="Pipeline health">
               <div className="health">
@@ -607,7 +607,7 @@ export default function AdvancedConsole({
           )}
 
           {/* KPI strip */}
-          {(tab === 0 || tab === 1 || tab === 3) && (
+          {tab === 0 && (
           <div className="grid g-kpi">
             <Kpi name="Total alerts" value={compact(total)}
               sub="since enclave start" spark={pulse} sparkColor={K.ok}
@@ -627,7 +627,7 @@ export default function AdvancedConsole({
           )}
 
           {/* Timeline + distribution + severity */}
-          {(tab === 0 || tab === 1 || tab === 3) && (
+          {tab === 0 && (
           <div className="grid g-main">
             <Panel name="Alert volume over time — by threat class"
               foot={`${slots.length} windows retained · peak ${peak} alerts/window`}>
@@ -710,52 +710,6 @@ export default function AdvancedConsole({
               </div>
             </Panel>
           </div>
-          )}
-
-          {/* Telemetry: top sources + highest-risk */}
-          {tab === 3 && (
-            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-              <Panel name="Top source addresses" foot="ranked by alert count in buffer">
-                <div style={{ height: 220, padding: '12px 12px 0 0' }}>
-                  {topSrc.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={topSrc} layout="vertical" margin={{ top: 0, right: 14, left: 4, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="2 4" stroke={gridInk} horizontal={false} />
-                        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
-                        <YAxis type="category" dataKey="ip" width={96} tickLine={false} axisLine={false} />
-                        <Tooltip content={<Tip />} cursor={{ fill: 'rgba(255,255,255,.03)' }} />
-                        <Bar dataKey="count" name="Alerts" radius={[0, 3, 3, 0]} barSize={13}>
-                          {topSrc.map((_, i) => (
-                            <Cell key={i} fill={i === 0 ? K.crit : i === 1 ? K.high : i === 2 ? K.med : K.dim} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  ) : <div className="chart-blank">no sources observed</div>}
-                </div>
-              </Panel>
-              <Panel name="Highest-risk sources" foot="score = alert volume × mean confidence">
-                {topSrc.length ? topSrc.slice(0, 6).map((s, i) => {
-                  const hits = alerts.filter(a => a.src_ip === s.full)
-                  const mc = hits.length ? hits.reduce((x, a) => x + a.confidence, 0) / hits.length : 0
-                  const risk = Math.min(Math.round((s.count * 6) + mc * 40), 100)
-                  const hue = risk >= 80 ? K.crit : risk >= 55 ? K.high : K.med
-                  const cls = hits[0]?.threat_class
-                  return (
-                    <div className="rank" key={s.full}>
-                      <span className="rank-ord">{String(i + 1).padStart(2, '0')}</span>
-                      <div className="rank-body">
-                        <div className="rank-t">{s.full}</div>
-                        <div className="rank-s">{s.count} alerts{cls ? ` · ${cls}` : ''}</div>
-                      </div>
-                      <span className="rank-n" style={{ color: hue }}>{risk}</span>
-                    </div>
-                  )
-                }) : (
-                  <div className="blank"><div className="blank-t">No sources scored</div><div className="blank-s">awaiting alerts</div></div>
-                )}
-              </Panel>
-            </div>
           )}
 
           {/* Sources + radar + modules + rank */}
@@ -847,7 +801,7 @@ export default function AdvancedConsole({
           )}
 
           {/* ── Detection Engines tab ── */}
-          {tab === 2 && (
+          {tab === 1 && (
             <>
               <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
                 <Panel name="Detection modules" foot="6 models in production · read-only, metadata-only inference">
@@ -893,7 +847,7 @@ export default function AdvancedConsole({
           )}
 
           {/* ── Flow Records tab ── */}
-          {tab === 4 && (
+          {tab === 2 && (
             <div className="grid" style={{ gridTemplateColumns: '1fr' }}>
               <Panel name="Flow records — captured metadata per detected flow"
                 foot="one row per alerted flow · 5-tuple, ports, protocol inferred from evidence · export honours filters">
@@ -945,8 +899,8 @@ export default function AdvancedConsole({
             </div>
           )}
 
-          {/* Incident ledger (full history · filters · CSV export) — Posture, Live Feed */}
-          {(tab === 0 || tab === 1) && IncidentLedger}
+          {/* Incident ledger — Posture tab only */}
+          {tab === 0 && IncidentLedger}
 
           <div className="mono" style={{ fontSize: 10, color: K.mute, textAlign: 'right', paddingTop: 2 }}>
             uptime {up} · window 10s · read-only ingest · no payload decryption
