@@ -567,7 +567,8 @@ export default function AdvancedConsole({
             <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>All severities</button>
             <button className={scope === 'crit' ? 'on' : ''} onClick={() => setScope('crit')}>Critical only</button>
           </div>
-          <button className="tool-btn">⧉ Enclave: read-only</button>
+          <button className="tool-btn">UniGuard</button>
+          <button className="tool-btn">⧉ Read-only</button>
           <button className="tool-btn">◷ Window 10s</button>
           <button className="tool-btn">⌗ v{alerts[0]?.model_version ?? '1.0.0'}</button>
           <span className="tool-note">
@@ -903,7 +904,7 @@ export default function AdvancedConsole({
           {tab === 0 && IncidentLedger}
 
           <div className="mono" style={{ fontSize: 10, color: K.mute, textAlign: 'right', paddingTop: 2 }}>
-            uptime {up} · window 10s · read-only ingest · no payload decryption
+            uptime {up} · UniGuard v1.0 · window 10s · read-only ingest · no payload decryption
           </div>
         </div>
       </div>

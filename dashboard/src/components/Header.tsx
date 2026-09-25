@@ -68,8 +68,8 @@ export function Header({
         </div>
 
         <div className="id-system">
-          <div className="id-sysname">Network Threat Monitor</div>
-          <div className="id-sysmeta">AI detection of cyber threats in unidirectional IP traffic</div>
+          <div className="id-sysname">UniGuard</div>
+          <div className="id-sysmeta">AI-powered cyber threat detection · unidirectional IP traffic</div>
         </div>
 
         <div className="id-right">

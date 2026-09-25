@@ -63,7 +63,7 @@ export default function App() {
           <nav className="crumb" aria-label="Breadcrumb">
             <a href="#main">Home</a>
             <span className="sep" aria-hidden="true">&rsaquo;</span>
-            <span className="here">Network Threat Monitor</span>
+            <span className="here">UniGuard</span>
           </nav>
 
           <SimpleView
