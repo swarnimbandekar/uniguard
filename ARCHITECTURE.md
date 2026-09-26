@@ -1,257 +1,128 @@
-# Architecture Document
+# UniGuard architecture
 
-## System Overview
+## Purpose
 
-This system implements an AI/ML pipeline for detecting cyber threats in unidirectional IP traffic. It operates under the strict constraint that the monitoring enclave has no return path to the production network — all analysis is passive, read-only, and metadata-driven.
+UniGuard is a metadata-only cyber-threat detection pipeline for traffic observed on a one-way monitoring path. It does not send traffic back to the monitored network, decrypt payloads, or inspect application content. Its inputs are packet headers, lengths, TCP flags, timing, and DNS query names when present.
+
+Two alternative sources feed the same pipeline:
+
+- **PCAP replay:** the Rust `ingest` service reads `.pcap`, `.pcapng`, and `.cap` files from `data/pcaps`.
+- **Live Windows capture:** `scripts/live_capture.py` uses Scapy/Npcap on the host and publishes passive captures to Kafka.
+
+Both publish packet-record JSON to `flow-records`.
+
+## Runtime topology
+
+```text
+PCAP files ──> Rust ingest ─┐
+                            ├─> Kafka: flow-records ─> Feature extractor
+Live interface ─> Scapy ────┘                              │
+                                      ┌─────────────────────┴───────────────────┐
+                                      │ local detectors                         │ gRPC
+                                      v                                         v
+                             Kafka: threat-alerts                    DGA inference server
+                                      │
+                                      v
+                               FastAPI backend
+                                      │ REST + WebSocket
+                                      v
+                         React dashboard / Windows launcher
+```
+
+`docker-compose.yml` starts Kafka, topic initialization, PCAP ingest, ML inference, feature extraction, backend, dashboard, and a Cloudflare tunnel. The tunnel is not needed for local operation.
 
 ## Components
 
-### 1. Rust Ingest Service (`/ingest`)
+| Component | Entry point | Responsibility | Interface |
+|---|---|---|---|
+| Kafka | Compose `kafka` and `kafka-init` | Event transport and topic creation | `9092` host / `29092` Compose network |
+| PCAP ingest | `ingest/src/main.rs` | Parses Ethernet/IP/TCP/UDP captures, extracts DNS queries where possible, publishes packet records | produces `flow-records` |
+| Live capture | `scripts/live_capture.py` | Native Windows passive capture; filters common multicast/broadcast and local DNS noise | produces `flow-records` |
+| Feature extractor | `ml-service/feature_extractor.py` | Aggregates flow state, scores detectors, and emits alerts | consumes `flow-records`, produces `threat-alerts`, calls gRPC |
+| Inference server | `ml-service/inference_server.py` | Loads DGA artifacts and provides protobuf inference/health RPCs | gRPC `50051` |
+| Backend | `backend/main.py` | Keeps recent alerts in memory, calculates stats, serves REST and WebSocket clients | `8000` container / `8001` host |
+| Dashboard | `dashboard/` | React SOC dashboard; REST bootstrap plus WebSocket updates | Nginx `80` container / `3000` host |
+| Launcher | `launcher/app.py` | Windows Tkinter control panel for Compose, health, demos, capture, and dashboard summary | host-side Docker/HTTP control |
 
-**Purpose**: High-performance packet capture reader and flow record producer.
+## Kafka contracts
 
-**Technology**: Rust with `pcap`, `etherparse`, and `rdkafka` crates.
+| Topic | Partitions | Producer | Consumer | Status |
+|---|---:|---|---|---|
+| `flow-records` | 4 | PCAP ingest or live capture | feature extractor | active |
+| `threat-alerts` | 2 | feature extractor | backend | active |
+| `flow-features` | 4 | — | — | created for future use |
 
-**Responsibilities**:
-- Read PCAP/PCAPNG files from a mounted volume (simulating a hardware data diode tap)
-- Parse Ethernet → IP → TCP/UDP headers using zero-copy parsing
-- Extract per-packet metadata: 5-tuple, TCP flags, payload length, timestamps
-- Parse DNS queries from UDP port 53 payloads
-- Serialize records as JSON and produce to Kafka `flow-records` topic
-- Support configurable replay speeds (real-time, 2x, 10x, max)
-- Report throughput metrics to stdout
+A packet record includes endpoint addresses and ports, protocol, microsecond timestamp, packet/payload lengths, TCP flags where applicable, an optional DNS query, and ingest time.
 
-**Key Design Decisions**:
-- Zero-copy packet parsing via `etherparse` for minimal allocation overhead
-- Async Kafka production with batching (`linger.ms=5`, `batch.num.messages=1000`)
-- No payload inspection beyond protocol headers (enforces no-decryption constraint)
-- File-watching capability for continuous PCAP ingestion
+An alert includes a UUID, timestamp, threat class, confidence, severity, endpoints, derived `flow_id`, detector-specific `evidence`, and model version.
 
-**Performance**: 10,000+ packets/second single-threaded on commodity hardware.
+## Detection flow
 
----
+The feature extractor consumes records in a Kafka consumer group and resets primary flow state every `WINDOW_SECONDS` (10 seconds by default). It flushes alerts at each boundary. C2 connection history persists across windows to measure periodicity over longer intervals.
 
-### 2. Feature Extraction + Detection Service (`/ml-service/feature_extractor.py`)
+| Threat class | Primary execution location | Method |
+|---|---|---|
+| `PortScan` | feature extractor | Calibrated model with streaming windows and connection-state approximation |
+| `DDoS` | feature extractor | Per-destination aggregation, local flow model, and behavioral guards |
+| `EncryptedMalware` | feature extractor | Local flow-metadata model for suspicious non-standard-port behavior |
+| `DataExfiltration` | feature extractor | Local flow-metadata model plus asymmetric-upload logic |
+| `C2_BEACONING` | feature extractor | Stateful periodicity/jitter analysis; excludes endpoints claimed by scan/flood logic in the same window |
+| `DGA` | inference server | Gradient boosting over domain statistics and character n-grams |
 
-**Purpose**: Aggregate raw packet records into flow-level features and run detection.
+The extractor retains a legacy DDoS gRPC request path, but its active DDoS alert path is the local per-destination scorer. The inference service currently loads DGA artifacts; other RPC branches are compatibility paths, not the primary detector implementation.
 
-**Technology**: Python with `confluent-kafka`, `scikit-learn`, `grpc`.
+## Backend and client flow
 
-**Responsibilities**:
-- Consume JSON packet records from Kafka `flow-records` topic
-- Maintain in-memory flow table keyed by 5-tuple (bidirectional)
-- Compute per-flow statistics over 10s tumbling windows:
-  - Duration, packet counts, byte counts, byte/packet rates
-  - Inter-arrival time statistics (mean, std) per direction
-  - TCP flag counts and ratios (SYN, ACK, RST, FIN, PSH)
-  - Packet-size distribution stats
-- Run **five detectors LOCALLY** at each window boundary (no gRPC round-trip):
-  - **PortScan** — per-source fan-out + calibrated model via streaming windower
-  - **DDoS** — aggregates flows per destination; flags volumetric floods
-  - **Encrypted Malware** — scores each non-standard-port flow
-  - **Data Exfiltration** — scores flows with asymmetric upload volume
-  - **C2 Beaconing** — tracks per-endpoint connection times, flags periodic beacons
-- Extract DNS domain features and call the gRPC inference server for **DGA**
-- Produce standardized alerts to Kafka `threat-alerts` topic
+The dashboard requests `/api/stats` and `/api/alerts` for initial state, then connects to `/ws/alerts`. Nginx proxies API and WebSocket traffic to the backend in Compose; Vite proxies the same paths during local frontend development.
 
-**Detector modules** (each a self-contained package under `/ml-service`):
-`portscan/`, `ddos/`, `encrypted_malware/`, `exfiltration/`, `c2beacon/`.
+The backend keeps at most 10,000 alerts in an in-memory `deque`. Restarting it clears the alert history and statistics; Kafka is transport, not long-term alert storage.
 
-**Windowing Strategy**: Fixed 10-second tumbling windows. At window close, all five
-local detectors score the accumulated flows, then flows are reset. The C2 beacon
-tracker persists connection history across windows (with stale-endpoint eviction) so
-periodicity can be measured over minutes. Provides bounded latency (<15s end-to-end).
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/health` | Status, uptime, alert count, WebSocket count |
+| `GET /api/stats` | Aggregate counts, rate, source ranking |
+| `GET /api/alerts` | Paginated alerts with threat/severity filters |
+| `GET /api/alerts/recent` | Latest alerts |
+| `POST /api/alerts/clear` | Clears in-memory alerts and stats |
+| `GET /api/alerts/timeline` | Ten-second alert buckets |
+| `POST /api/demo`, `GET /api/demo/status` | Demo execution and status |
+| `WS /ws/alerts` | Recent replay, live alert events, and keepalives |
 
----
+## Deployment configuration
 
-### 3. ML Inference Server (`/ml-service/inference_server.py`)
+Compose uses the `threatnet` bridge network. Host-facing ports are Kafka `9092`, gRPC `50051`, backend `8001`, and dashboard `3000`. Services use internal names including `kafka:29092`, `ml-inference:50051`, and `backend:8000`.
 
-**Purpose**: Serve the DGA model via gRPC (the only detector that runs off-box).
+| Setting | Compose value | Consumer |
+|---|---|---|
+| `KAFKA_BROKER` | `kafka:29092` | ingest, extractor, backend |
+| `KAFKA_INPUT_TOPIC` | `flow-records` | extractor |
+| `KAFKA_OUTPUT_TOPIC` / `KAFKA_TOPIC` | `threat-alerts` | extractor / backend |
+| `WINDOW_SECONDS` | `10` | extractor |
+| `CONFIDENCE_THRESHOLD` | `0.8` | extractor gRPC-result filtering |
+| detector model path variables | `/app/models/*` | extractor |
+| `GRPC_INFERENCE_HOST` | `ml-inference:50051` | extractor |
 
-**Technology**: Python with `grpc`, `scikit-learn`, `joblib`.
+Model artifacts and the PCAP input directory are mounted read-only. Live capture remains outside Docker on Windows because it requires host interface access.
 
-**Models**:
+## Repository map
 
-| Model | Algorithm | Input | Output |
-|-------|-----------|-------|--------|
-| DGA | Gradient Boosting (200 trees, depth 5) | 19 stat features + 200 char n-grams | Binary: BENIGN/DGA |
-
-The other five detectors run locally inside the feature extractor for lower latency.
-See each model's metadata JSON in `/ml-service/models` for exact features and thresholds.
-
-**API**:
-- `PredictDns(DnsFeatures)` → single DGA prediction
-- `PredictDnsBatch(DnsFeatures[])` → batch DGA prediction
-- `HealthCheck()` → server status and loaded models
-
----
-
-### 3a. Detection Models Summary
-
-| Threat Class | Model Type | Features | Threshold | Notes |
-|---|---|---|---|---|
-| `PortScan` | Logistic Regression (calibrated) | 18 | 0.60 | Streaming windower, Zeek conn_state approx |
-| `DDoS` | HistGradientBoosting | 31 | 0.92 | Per-destination aggregation for volumetric floods |
-| `DGA` | Gradient Boosting + n-grams | 19 + 200 | — | Runs via gRPC |
-| `C2_BEACONING` | Periodicity analysis | temporal | 0.70 | Inter-arrival jitter CV (≤0.40) across repeated **established** connections, temporally clustered, on non-standard ports |
-| `EncryptedMalware` | HistGradientBoosting | 31 | 0.28 | Non-standard-port flows; rule override for beacons |
-| `DataExfiltration` | HistGradientBoosting | 29 | 0.99 | Rule override for large asymmetric uploads |
-
-All flow models are trained on synthetic behavioral data (`train_all_models.py`,
-`train_encrypted_malware.py`) and reinforced with deterministic rule overrides plus
-minimum-volume guards to suppress false positives on real traffic.
-
-**Severity Mapping**: Confidence ≥ 0.95 → CRITICAL · ≥ 0.85 → HIGH · ≥ 0.70 → MEDIUM · below → LOW
-
-**Detector Coordination (avoiding cross-firing)**: The five local detectors run in a
-fixed order at each window boundary (DDoS → EncryptedMalware → Exfiltration → C2 Beacon),
-sharing a per-window suppression set. DDoS records its victim destinations and the
-streaming PortScan path records scanner sources; the C2 beacon scorer skips any claimed
-endpoint. In addition, a flow is only fed to the C2 tracker if it (a) received a response
-(not a SYN-only/failed probe), (b) carries a minimum payload, (c) is on a non-standard
-port, and (d) is low-rate. The beacon scorer further requires connections to be
-temporally clustered (bounded total span) so a slow trickle of unrelated connections is
-not assembled into a false beacon. Net effect: a port scan, DDoS flood, or
-encrypted-malware session each maps to its own alert class rather than all being
-reported as C2 beaconing.
-
----
-
-### 4. FastAPI Backend (`/backend/main.py`)
-
-**Purpose**: Bridge between Kafka alerts and the React dashboard via WebSocket and REST.
-
-**Technology**: Python with FastAPI, uvicorn, WebSocket.
-
-**Endpoints**:
-- `GET /api/health` — Service health and uptime
-- `GET /api/stats` — Aggregate alert statistics
-- `GET /api/alerts?page=1&page_size=50` — Paginated alert history
-- `GET /api/alerts/recent?limit=20` — Most recent alerts
-- `GET /api/alerts/timeline?window_minutes=5` — Time-bucketed alert counts
-- `WS /ws/alerts` — Real-time alert stream
-
-**Design**:
-- Background thread consumes from Kafka `threat-alerts`
-- In-memory deque stores last 10,000 alerts (sufficient for prototype)
-- All connected WebSocket clients receive each alert immediately
-- Auto-reconnect support via heartbeat messages
-
----
-
-### 5. React Dashboard (`/dashboard`)
-
-**Purpose**: Real-time visualization of threat detections.
-
-**Technology**: React 18 + TypeScript, Recharts, Vite.
-
-**Components**:
-- **Stats Cards**: Total alerts, alerts/min, critical threats, active sources
-- **Alert Timeline**: Line chart showing alert rate by threat type (30-point sliding window)
-- **Alert Feed**: Real-time scrolling list, color-coded by severity
-- **Threat Distribution**: Donut chart of alert counts by class
-- **Top Attackers**: Horizontal bar chart of source IPs
-- **Detail Panel**: Slide-in panel showing full alert evidence on click
-
-**Design Decisions**:
-- Dark theme (standard for security operations centers)
-- WebSocket with auto-reconnect (3s retry)
-- Client-side state only — no client-side persistence
-- Responsive CSS Grid layout
-
----
-
-### 6. Desktop Console (`/launcher`)
-
-**Purpose**: A native Windows operator console that drives the whole stack from a
-single window — so a demo doesn't require juggling several terminals and a browser.
-
-**Technology**: Python + Tkinter (standard library only at runtime), packaged into a
-single-file `ThreatDetectionConsole.exe` via PyInstaller.
-
-**Two views (top nav bar):**
-- **Control Panel**: Start / Stop / Rebuild the Docker Compose pipeline, live service
-  health dots, demo & attack buttons (all 6 attacks + the capture-bridge starter), a
-  streamed console log, and a quick-open **Terminal** button. The left column is
-  scrollable so every control is reachable at any window size.
-- **Dashboard**: An embedded live SOC view rendered with Tkinter canvas charts (donut
-  threat distribution, alert-rate line chart, severity + top-source bars, animated stat
-  cards, live alert feed). Polls the backend REST API every ~3s.
-
-**Design Decisions**:
-- Orchestration only — the launcher runs `docker compose`, the helper scripts, and reads
-  the backend API. It never captures or writes network traffic itself, preserving the
-  system's passive/read-only model.
-- Resolves the project root by searching upward for `docker-compose.yml`, so it works
-  whether run from source (`python launcher/app.py`) or as the frozen `.exe`.
-- Forces UTF-8 on child processes so helper scripts that print Unicode never crash on a
-  legacy console codec.
-
-**Distribution note**: The unsigned, freshly-built `.exe` may be blocked by Windows
-Smart App Control or flagged by SmartScreen (no publisher reputation yet). Running from
-source (`python launcher/app.py`) avoids this; code-signing (EV certificate) removes it
-for distribution. See `launcher/README.md`.
-
----
-
-### 7. Messaging Infrastructure (Kafka)
-
-**Configuration**: Apache Kafka 3.7 in KRaft mode (no Zookeeper dependency).
-
-**Topics**:
-| Topic | Partitions | Purpose |
-|-------|-----------|---------|
-| `flow-records` | 4 | Raw packet records from ingest |
-| `flow-features` | 4 | (Reserved) Computed features |
-| `threat-alerts` | 2 | Classified threat alerts |
-
-**Retention**: 1 hour (sufficient for live monitoring; not a storage system).
-
----
-
-## Data Flow
-
-```
-PCAP / Live Capture → [Ingest] → Kafka:flow-records → [Feature Extractor + 5 local detectors]
-                                                              │  └─ gRPC → [ML Inference: DGA]
-                                                              ▼
-                                                       Kafka:threat-alerts
-                                                              ▼
-                                                       [FastAPI Backend] ──── REST/WS ────┐
-                                                              ▼                            ▼
-                                                       WebSocket → [React Dashboard]   [Desktop Console (.exe)]
-                                                                                        embedded dashboard +
-                                                                                        pipeline orchestration
+```text
+backend/                 FastAPI alert service
+dashboard/               React dashboard and Nginx proxy
+ingest/                  Rust offline-PCAP replay producer
+launcher/                Windows Tkinter console and PyInstaller setup
+ml-service/              extractor, inference service, detector packages, models, training
+proto/                   inference protobuf contract
+scripts/                 capture, injection, attack, test, and troubleshooting utilities
+c2_beaconing_detector/   reference/legacy C2 package
+docker-compose.yml       local multi-service topology
 ```
 
-The Desktop Console sits alongside the browser dashboard: it reads the same backend REST
-API for its embedded live view and drives `docker compose` + the helper scripts to
-operate the pipeline. It is an operator front-end, not part of the detection data path.
+`proto/inference.proto` and `ml-service/proto/inference.proto` are duplicate protobuf definitions used by the ML Docker builds; update both when changing the RPC contract.
 
-## Security Model
+## Operational limitations
 
-1. **Read-Only Ingest**: Capture reads from a mounted volume or a passive mirror. No network write-back.
-2. **No Decryption**: All traffic analyzed by metadata only — headers, flags, timing, byte volumes. No payload inspection.
-3. **Isolation**: Each service runs in its own container with minimal privileges.
-4. **No Inline Blocking**: The system produces intelligence (alerts), never mitigation commands.
-
-## Deployment
-
-Single-machine deployment via Docker Compose. All services communicate over a private Docker bridge network (`threatnet`). External access only via:
-- Port 3000: Dashboard (nginx)
-- Port 8001: API (host port; maps to backend container port 8000)
-
-Optionally, the **Desktop Console** (`launcher/`) runs on the host — either from source
-(`python launcher/app.py`) or as `launcher/dist/ThreatDetectionConsole.exe` — to start
-the stack, monitor health, and view alerts without a browser. The live capture bridge
-(`scripts/live_capture.py`) also runs on the host (as Administrator) since Docker cannot
-access host network interfaces on Windows.
-
-For production, services would be distributed across multiple hosts with Kafka cluster replication.
-
-## Scalability Considerations
-
-- **Horizontal Ingest**: Multiple Rust instances can read different PCAP files
-- **Kafka Partitioning**: 4 partitions allow up to 4 parallel feature extractor instances
-- **Inference Scaling**: gRPC server can run multiple replicas behind a load balancer
-- **Model Updates**: Hot-reload models by mounting a new model directory (no restart needed — future enhancement)
+- UniGuard monitors only; it does not block or remediate traffic.
+- Detection quality depends on capture visibility, model calibration, and local traffic characteristics.
+- Windowing adds a normal delay before an event can become eligible for alerting.
+- Add an external storage sink before using alerts for retention or audit requirements.
