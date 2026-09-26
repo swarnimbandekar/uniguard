@@ -1,6 +1,6 @@
 export function Footer({ uptime }: { uptime: string }) {
   const year = new Date().getFullYear()
-  const githubUrl = 'https://github.com/swarnimbandekar/sih/releases/latest'
+  const githubUrl = 'https://github.com/swarnimbandekar/uniguard/releases/latest'
   return (
     <footer className="gov-footer">
       <div className="foot-main">
